@@ -1,0 +1,969 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#111827" />
+  <title>Entrevistas de Investigación - Grabadora</title>
+  <style>
+    :root{
+      --bg:#f3f4f6;
+      --card:#ffffff;
+      --text:#111827;
+      --muted:#6b7280;
+      --border:#d1d5db;
+      --primary:#111827;
+      --danger:#b91c1c;
+      --warning:#92400e;
+      --ok:#166534;
+      --accent:#2563eb;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      background:var(--bg);
+      color:var(--text);
+    }
+    .wrap{
+      max-width:820px;
+      margin:0 auto;
+      padding:16px;
+    }
+    .card{
+      background:var(--card);
+      border:1px solid var(--border);
+      border-radius:16px;
+      padding:16px;
+      margin-bottom:14px;
+    }
+    h1{font-size:1.45rem;margin:0 0 4px}
+    h2{font-size:1.05rem;margin:0 0 12px}
+    p{line-height:1.45}
+    .muted{color:var(--muted);font-size:.92rem}
+    label{
+      display:block;
+      font-weight:650;
+      margin:12px 0 6px;
+    }
+    input, textarea, select{
+      width:100%;
+      min-height:46px;
+      border:1px solid var(--border);
+      border-radius:10px;
+      padding:10px 12px;
+      font:inherit;
+      background:white;
+      color:var(--text);
+    }
+    textarea{min-height:86px;resize:vertical}
+    .row{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:12px;
+    }
+    @media (max-width:600px){
+      .row{grid-template-columns:1fr}
+    }
+    .check{
+      display:flex;
+      align-items:flex-start;
+      gap:10px;
+      margin-top:14px;
+      font-weight:500;
+    }
+    .check input{
+      width:22px;
+      min-height:22px;
+      margin:1px 0 0;
+      flex:0 0 auto;
+    }
+    .recorder{
+      text-align:center;
+    }
+    .timer{
+      font-variant-numeric:tabular-nums;
+      font-size:2.15rem;
+      font-weight:800;
+      margin:10px 0 4px;
+      letter-spacing:.04em;
+    }
+    .status{
+      min-height:24px;
+      margin-bottom:12px;
+      font-weight:650;
+    }
+    .status.recording{color:var(--danger)}
+    .status.paused{color:var(--warning)}
+    .status.ready{color:var(--ok)}
+    .buttons{
+      display:flex;
+      flex-wrap:wrap;
+      gap:10px;
+      justify-content:center;
+      margin-top:12px;
+    }
+    button{
+      min-height:48px;
+      border:0;
+      border-radius:12px;
+      padding:11px 16px;
+      font:inherit;
+      font-weight:750;
+      cursor:pointer;
+      background:var(--primary);
+      color:white;
+    }
+    button.secondary{background:#4b5563}
+    button.danger{background:var(--danger)}
+    button.light{
+      background:#e5e7eb;
+      color:#111827;
+    }
+    button:disabled{
+      opacity:.45;
+      cursor:not-allowed;
+    }
+    .meter{
+      height:16px;
+      border-radius:999px;
+      overflow:hidden;
+      background:#e5e7eb;
+      margin:14px 0 6px;
+      border:1px solid #d1d5db;
+    }
+    .meter > div{
+      width:0%;
+      height:100%;
+      background:#374151;
+      transition:width .08s linear;
+    }
+    .stats{
+      display:grid;
+      grid-template-columns:repeat(3,1fr);
+      gap:10px;
+      margin-top:14px;
+    }
+    .stat{
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:10px;
+      background:#fafafa;
+    }
+    .stat b{display:block;font-size:1.15rem}
+    @media(max-width:520px){
+      .stats{grid-template-columns:1fr}
+    }
+    .notice{
+      border-left:4px solid var(--warning);
+      background:#fffbeb;
+      padding:10px 12px;
+      border-radius:8px;
+      font-size:.92rem;
+      margin-top:12px;
+    }
+    .okbox{
+      border-left:4px solid var(--ok);
+      background:#f0fdf4;
+      padding:10px 12px;
+      border-radius:8px;
+      font-size:.92rem;
+      margin-top:12px;
+    }
+    .segment{
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:10px;
+      margin:8px 0;
+      display:flex;
+      gap:10px;
+      justify-content:space-between;
+      align-items:center;
+    }
+    .segment small{display:block;color:var(--muted)}
+    .segment button{
+      min-height:40px;
+      padding:8px 11px;
+      white-space:nowrap;
+    }
+    .toolbar{
+      display:flex;
+      flex-wrap:wrap;
+      gap:8px;
+      margin-top:10px;
+    }
+    .empty{
+      color:var(--muted);
+      text-align:center;
+      padding:14px;
+      border:1px dashed var(--border);
+      border-radius:10px;
+    }
+    .footer{
+      color:var(--muted);
+      font-size:.84rem;
+      text-align:center;
+      padding:8px 0 20px;
+    }
+    .hidden{display:none!important}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <section class="card">
+    <h1>Entrevistas de Investigación</h1>
+    <div class="muted">Grabadora móvil para sesiones largas con respaldo local por segmentos.</div>
+
+    <div class="row">
+      <div>
+        <label for="projectName">Proyecto / Tesina</label>
+        <input id="projectName" placeholder="Ej. Digitalización de procedimientos laborales">
+      </div>
+      <div>
+        <label for="interviewer">Entrevistador</label>
+        <input id="interviewer" placeholder="Nombre del entrevistador">
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label for="intervieweeCode">Código del entrevistado</label>
+        <input id="intervieweeCode" placeholder="Ej. E01">
+      </div>
+      <div>
+        <label for="segmentMinutes">Respaldo por segmento</label>
+        <select id="segmentMinutes">
+          <option value="1">Cada 1 minuto — máxima seguridad</option>
+          <option value="5" selected>Cada 5 minutos — recomendado</option>
+          <option value="10">Cada 10 minutos</option>
+        </select>
+      </div>
+    </div>
+
+    <label class="check">
+      <input type="checkbox" id="consent">
+      <span>Confirmo que el entrevistado fue informado y autorizó la grabación con fines académicos o de investigación.</span>
+    </label>
+  </section>
+
+  <section class="card recorder">
+    <h2>Grabación</h2>
+    <div class="timer" id="timer">00:00:00</div>
+    <div class="status ready" id="status">Lista para comenzar</div>
+
+    <div class="meter" aria-label="Nivel aproximado del micrófono">
+      <div id="levelBar"></div>
+    </div>
+    <div class="muted" id="audioHint">El indicador se activará al iniciar la grabación.</div>
+
+    <div class="buttons">
+      <button id="startBtn">▶ Iniciar entrevista</button>
+      <button id="pauseBtn" class="secondary" disabled>⏸ Pausar</button>
+      <button id="resumeBtn" class="secondary" disabled>▶ Reanudar</button>
+      <button id="finishBtn" class="danger" disabled>⏹ Finalizar</button>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><span class="muted">Segmentos guardados</span><b id="segmentCount">0</b></div>
+      <div class="stat"><span class="muted">Datos almacenados</span><b id="storedSize">0 MB</b></div>
+      <div class="stat"><span class="muted">Sesión</span><b id="sessionCode">—</b></div>
+    </div>
+
+    <div class="notice">
+      Para usar el micrófono desde una página web publicada, ábrela mediante <b>HTTPS</b>. En celular conviene mantener la pantalla activa durante la entrevista; algunos navegadores pueden retrasar la entrega de segmentos cuando el equipo se bloquea.
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Notas del investigador</h2>
+    <textarea id="notes" placeholder="Observaciones, incidencias, contexto de la entrevista..."></textarea>
+    <div class="toolbar">
+      <button id="markerBtn" class="light" disabled>⭐ Marcar momento importante</button>
+      <button id="saveNotesBtn" class="light">Guardar notas</button>
+    </div>
+    <div id="markersBox" class="muted" style="margin-top:10px"></div>
+  </section>
+
+  <section class="card">
+    <h2>Segmentos de audio guardados</h2>
+    <div id="segmentsList" class="empty">Aún no hay segmentos guardados en esta sesión.</div>
+    <div class="toolbar">
+      <button id="downloadAllBtn" class="light" disabled>⬇ Descargar todos</button>
+      <button id="exportMetaBtn" class="light" disabled>📄 Exportar ficha JSON</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Sesiones recuperables en este dispositivo</h2>
+    <div id="savedSessions" class="empty">Buscando sesiones locales...</div>
+  </section>
+
+  <div class="footer">
+    Versión 1 · Grabación local. La transcripción automática se añadirá en la siguiente versión.
+  </div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const $ = id => document.getElementById(id);
+
+  const ui = {
+    projectName: $("projectName"),
+    interviewer: $("interviewer"),
+    intervieweeCode: $("intervieweeCode"),
+    segmentMinutes: $("segmentMinutes"),
+    consent: $("consent"),
+    timer: $("timer"),
+    status: $("status"),
+    levelBar: $("levelBar"),
+    audioHint: $("audioHint"),
+    startBtn: $("startBtn"),
+    pauseBtn: $("pauseBtn"),
+    resumeBtn: $("resumeBtn"),
+    finishBtn: $("finishBtn"),
+    segmentCount: $("segmentCount"),
+    storedSize: $("storedSize"),
+    sessionCode: $("sessionCode"),
+    notes: $("notes"),
+    markerBtn: $("markerBtn"),
+    saveNotesBtn: $("saveNotesBtn"),
+    markersBox: $("markersBox"),
+    segmentsList: $("segmentsList"),
+    downloadAllBtn: $("downloadAllBtn"),
+    exportMetaBtn: $("exportMetaBtn"),
+    savedSessions: $("savedSessions")
+  };
+
+  const DB_NAME = "tesina_interviews_db";
+  const DB_VERSION = 1;
+  const STORE_SESSIONS = "sessions";
+  const STORE_SEGMENTS = "segments";
+
+  let db = null;
+  let mediaStream = null;
+  let recorder = null;
+  let currentSession = null;
+  let timerInterval = null;
+  let startedAt = 0;
+  let pausedAt = 0;
+  let totalPausedMs = 0;
+  let pauseStartedAt = 0;
+  let chunkIndex = 0;
+  let chunkStartElapsedMs = 0;
+  let analyser = null;
+  let audioCtx = null;
+  let animationFrame = null;
+  let wakeLock = null;
+  let finishing = false;
+
+  function pad(n){ return String(n).padStart(2,"0"); }
+
+  function formatDuration(ms){
+    ms = Math.max(0, ms || 0);
+    const total = Math.floor(ms / 1000);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    return `${pad(h)}:${pad(m)}:${pad(s)}`;
+  }
+
+  function formatBytes(bytes){
+    if (!bytes) return "0 MB";
+    return `${(bytes / 1024 / 1024).toFixed(bytes < 10*1024*1024 ? 2 : 1)} MB`;
+  }
+
+  function safeName(value){
+    return (value || "sin_nombre")
+      .trim()
+      .replace(/[^\p{L}\p{N}_-]+/gu, "_")
+      .replace(/^_+|_+$/g,"")
+      .slice(0,60) || "sin_nombre";
+  }
+
+  function elapsedMs(){
+    if (!currentSession) return 0;
+    const end = (recorder && recorder.state !== "inactive") ? Date.now() : (currentSession.endedAt || Date.now());
+    let paused = totalPausedMs;
+    if (recorder && recorder.state === "paused" && pauseStartedAt) {
+      paused += end - pauseStartedAt;
+    }
+    return Math.max(0, end - startedAt - paused);
+  }
+
+  function setStatus(text, cls){
+    ui.status.textContent = text;
+    ui.status.className = "status " + (cls || "");
+  }
+
+  function updateControls(){
+    const state = recorder ? recorder.state : "inactive";
+    const active = !!currentSession && state !== "inactive";
+
+    ui.startBtn.disabled = active;
+    ui.pauseBtn.disabled = state !== "recording";
+    ui.resumeBtn.disabled = state !== "paused";
+    ui.finishBtn.disabled = !active;
+    ui.markerBtn.disabled = !active;
+    ui.projectName.disabled = active;
+    ui.interviewer.disabled = active;
+    ui.intervieweeCode.disabled = active;
+    ui.segmentMinutes.disabled = active;
+    ui.consent.disabled = active;
+  }
+
+  function startTimer(){
+    stopTimer();
+    timerInterval = setInterval(() => {
+      ui.timer.textContent = formatDuration(elapsedMs());
+    }, 250);
+  }
+
+  function stopTimer(){
+    if (timerInterval) clearInterval(timerInterval);
+    timerInterval = null;
+  }
+
+  async function openDB(){
+    return new Promise((resolve,reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = e => {
+        const database = e.target.result;
+        if (!database.objectStoreNames.contains(STORE_SESSIONS)) {
+          database.createObjectStore(STORE_SESSIONS, { keyPath:"id" });
+        }
+        if (!database.objectStoreNames.contains(STORE_SEGMENTS)) {
+          const store = database.createObjectStore(STORE_SEGMENTS, { keyPath:"id" });
+          store.createIndex("sessionId","sessionId",{unique:false});
+        }
+      };
+      req.onsuccess = e => resolve(e.target.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  function dbPut(storeName, value){
+    return new Promise((resolve,reject) => {
+      const tx = db.transaction(storeName,"readwrite");
+      tx.objectStore(storeName).put(value);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  function dbGetAll(storeName){
+    return new Promise((resolve,reject) => {
+      const tx = db.transaction(storeName,"readonly");
+      const req = tx.objectStore(storeName).getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  function dbGetSegments(sessionId){
+    return new Promise((resolve,reject) => {
+      const tx = db.transaction(STORE_SEGMENTS,"readonly");
+      const idx = tx.objectStore(STORE_SEGMENTS).index("sessionId");
+      const req = idx.getAll(IDBKeyRange.only(sessionId));
+      req.onsuccess = () => resolve((req.result || []).sort((a,b)=>a.index-b.index));
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function refreshSavedSessions(){
+    const sessions = (await dbGetAll(STORE_SESSIONS)).sort((a,b)=>(b.startedAt||0)-(a.startedAt||0));
+    if (!sessions.length){
+      ui.savedSessions.className = "empty";
+      ui.savedSessions.textContent = "No hay sesiones almacenadas todavía.";
+      return;
+    }
+    ui.savedSessions.className = "";
+    ui.savedSessions.innerHTML = "";
+    for (const s of sessions.slice(0,20)){
+      const div = document.createElement("div");
+      div.className = "segment";
+      const left = document.createElement("div");
+      const title = document.createElement("b");
+      title.textContent = `${s.intervieweeCode || "Sin código"} · ${s.projectName || "Sin proyecto"}`;
+      const meta = document.createElement("small");
+      const date = new Date(s.startedAt).toLocaleString();
+      meta.textContent = `${date} · ${s.status || "sin estado"} · ${s.segmentCount || 0} segmentos`;
+      left.append(title,meta);
+
+      const btn = document.createElement("button");
+      btn.className = "light";
+      btn.textContent = "Ver";
+      btn.addEventListener("click", async () => {
+        if (recorder && recorder.state !== "inactive") {
+          alert("Finaliza la grabación actual antes de abrir otra sesión.");
+          return;
+        }
+        currentSession = s;
+        startedAt = s.startedAt;
+        totalPausedMs = s.totalPausedMs || 0;
+        pauseStartedAt = 0;
+        chunkIndex = s.segmentCount || 0;
+        ui.projectName.value = s.projectName || "";
+        ui.interviewer.value = s.interviewer || "";
+        ui.intervieweeCode.value = s.intervieweeCode || "";
+        ui.notes.value = s.notes || "";
+        ui.sessionCode.textContent = s.id.slice(-8);
+        ui.timer.textContent = formatDuration(s.durationMs || 0);
+        setStatus(s.status === "finished" ? "Sesión finalizada cargada" : "Sesión recuperada", "ready");
+        renderMarkers();
+        await refreshSegments();
+        updateControls();
+      });
+      div.append(left,btn);
+      ui.savedSessions.appendChild(div);
+    }
+  }
+
+  function chooseMimeType(){
+    const candidates = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/mp4",
+      "audio/ogg;codecs=opus"
+    ];
+    return candidates.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
+  }
+
+  async function requestWakeLock(){
+    try{
+      if ("wakeLock" in navigator) {
+        wakeLock = await navigator.wakeLock.request("screen");
+      }
+    }catch(e){
+      console.warn("Wake Lock no disponible:", e);
+    }
+  }
+
+  async function releaseWakeLock(){
+    try{
+      if (wakeLock) await wakeLock.release();
+    }catch(e){}
+    wakeLock = null;
+  }
+
+  async function setupAudioMeter(stream){
+    try{
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioCtx.createMediaStreamSource(stream);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      const data = new Uint8Array(analyser.frequencyBinCount);
+
+      const draw = () => {
+        if (!analyser) return;
+        analyser.getByteFrequencyData(data);
+        let sum = 0;
+        for (const v of data) sum += v;
+        const avg = sum / data.length;
+        const pct = Math.min(100, Math.max(2, avg * 1.7));
+        ui.levelBar.style.width = pct + "%";
+        animationFrame = requestAnimationFrame(draw);
+      };
+      draw();
+      ui.audioHint.textContent = "Nivel aproximado del micrófono en tiempo real.";
+    }catch(e){
+      ui.audioHint.textContent = "No fue posible mostrar el nivel del micrófono, pero la grabación puede continuar.";
+    }
+  }
+
+  function stopAudioMeter(){
+    if (animationFrame) cancelAnimationFrame(animationFrame);
+    animationFrame = null;
+    analyser = null;
+    if (audioCtx){
+      audioCtx.close().catch(()=>{});
+      audioCtx = null;
+    }
+    ui.levelBar.style.width = "0%";
+  }
+
+  async function saveSession(){
+    if (!currentSession) return;
+    currentSession.notes = ui.notes.value;
+    currentSession.durationMs = elapsedMs();
+    currentSession.totalPausedMs = totalPausedMs;
+    currentSession.segmentCount = chunkIndex;
+    currentSession.updatedAt = Date.now();
+    await dbPut(STORE_SESSIONS,currentSession);
+  }
+
+  async function startRecording(){
+    if (!ui.consent.checked){
+      alert("Debes confirmar la autorización para grabar antes de iniciar.");
+      return;
+    }
+    if (!ui.projectName.value.trim() || !ui.interviewer.value.trim() || !ui.intervieweeCode.value.trim()){
+      alert("Completa Proyecto/Tesina, Entrevistador y Código del entrevistado.");
+      return;
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder){
+      alert("Este navegador no ofrece las funciones necesarias para grabar audio.");
+      return;
+    }
+
+    try{
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio:{
+          echoCancellation:true,
+          noiseSuppression:true,
+          autoGainControl:true,
+          channelCount:1
+        },
+        video:false
+      });
+
+      const now = Date.now();
+      const id = `ENT-${now}-${Math.random().toString(36).slice(2,7)}`;
+      const mimeType = chooseMimeType();
+      currentSession = {
+        id,
+        projectName:ui.projectName.value.trim(),
+        interviewer:ui.interviewer.value.trim(),
+        intervieweeCode:ui.intervieweeCode.value.trim(),
+        startedAt:now,
+        endedAt:null,
+        status:"recording",
+        mimeType,
+        notes:ui.notes.value,
+        markers:[],
+        durationMs:0,
+        totalPausedMs:0,
+        segmentCount:0,
+        bytes:0,
+        segmentMinutes:Number(ui.segmentMinutes.value) || 5
+      };
+
+      startedAt = now;
+      totalPausedMs = 0;
+      pauseStartedAt = 0;
+      chunkIndex = 0;
+      chunkStartElapsedMs = 0;
+      finishing = false;
+
+      recorder = mimeType
+        ? new MediaRecorder(mediaStream,{mimeType,audioBitsPerSecond:64000})
+        : new MediaRecorder(mediaStream,{audioBitsPerSecond:64000});
+
+      recorder.addEventListener("dataavailable", async e => {
+        if (!e.data || e.data.size === 0 || !currentSession) return;
+        const endMs = elapsedMs();
+        chunkIndex += 1;
+        const segment = {
+          id:`${currentSession.id}-SEG-${String(chunkIndex).padStart(4,"0")}`,
+          sessionId:currentSession.id,
+          index:chunkIndex,
+          createdAt:Date.now(),
+          startMs:chunkStartElapsedMs,
+          endMs,
+          size:e.data.size,
+          mimeType:e.data.type || currentSession.mimeType || "audio/webm",
+          blob:e.data
+        };
+        chunkStartElapsedMs = endMs;
+        await dbPut(STORE_SEGMENTS,segment);
+        currentSession.segmentCount = chunkIndex;
+        currentSession.bytes = (currentSession.bytes || 0) + e.data.size;
+        await saveSession();
+        await refreshSegments();
+      });
+
+      recorder.addEventListener("pause", async () => {
+        pauseStartedAt = Date.now();
+        currentSession.status = "paused";
+        setStatus("Grabación pausada", "paused");
+        await saveSession();
+        updateControls();
+      });
+
+      recorder.addEventListener("resume", async () => {
+        if (pauseStartedAt){
+          totalPausedMs += Date.now() - pauseStartedAt;
+          pauseStartedAt = 0;
+        }
+        currentSession.status = "recording";
+        setStatus("Grabando", "recording");
+        await saveSession();
+        updateControls();
+      });
+
+      recorder.addEventListener("stop", async () => {
+        if (pauseStartedAt){
+          totalPausedMs += Date.now() - pauseStartedAt;
+          pauseStartedAt = 0;
+        }
+        if (currentSession){
+          currentSession.status = "finished";
+          currentSession.endedAt = Date.now();
+          currentSession.durationMs = elapsedMs();
+          await saveSession();
+        }
+        stopTimer();
+        stopAudioMeter();
+        await releaseWakeLock();
+        if (mediaStream){
+          mediaStream.getTracks().forEach(t=>t.stop());
+          mediaStream = null;
+        }
+        setStatus("Entrevista finalizada y guardada", "ready");
+        updateControls();
+        await refreshSegments();
+        await refreshSavedSessions();
+        finishing = false;
+      });
+
+      recorder.addEventListener("error", async e => {
+        console.error("MediaRecorder error", e);
+        setStatus("Se produjo un error de grabación", "paused");
+        if (currentSession){
+          currentSession.status = "error";
+          await saveSession();
+        }
+      });
+
+      await dbPut(STORE_SESSIONS,currentSession);
+
+      const sliceMs = currentSession.segmentMinutes * 60 * 1000;
+      recorder.start(sliceMs);
+
+      ui.sessionCode.textContent = id.slice(-8);
+      ui.timer.textContent = "00:00:00";
+      setStatus("Grabando", "recording");
+      startTimer();
+      setupAudioMeter(mediaStream);
+      requestWakeLock();
+      updateControls();
+      await refreshSegments();
+      await refreshSavedSessions();
+    }catch(err){
+      console.error(err);
+      alert("No se pudo iniciar el micrófono. Verifica el permiso del navegador y que la página se abra mediante HTTPS.");
+    }
+  }
+
+  async function pauseRecording(){
+    if (!recorder || recorder.state !== "recording") return;
+    try{
+      recorder.requestData();
+    }catch(e){}
+    recorder.pause();
+  }
+
+  async function resumeRecording(){
+    if (!recorder || recorder.state !== "paused") return;
+    recorder.resume();
+  }
+
+  async function finishRecording(){
+    if (!recorder || recorder.state === "inactive" || finishing) return;
+    if (!confirm("¿Finalizar la entrevista? La grabación se cerrará y quedará guardada en este dispositivo.")) return;
+    finishing = true;
+    setStatus("Guardando último segmento…", "paused");
+    try{
+      if (recorder.state === "paused"){
+        recorder.resume();
+        if (pauseStartedAt){
+          totalPausedMs += Date.now() - pauseStartedAt;
+          pauseStartedAt = 0;
+        }
+      }
+      recorder.stop();
+    }catch(e){
+      finishing = false;
+      console.error(e);
+    }
+  }
+
+  async function refreshSegments(){
+    if (!currentSession){
+      ui.segmentsList.className = "empty";
+      ui.segmentsList.textContent = "Aún no hay segmentos guardados en esta sesión.";
+      ui.downloadAllBtn.disabled = true;
+      ui.exportMetaBtn.disabled = true;
+      ui.segmentCount.textContent = "0";
+      ui.storedSize.textContent = "0 MB";
+      return;
+    }
+
+    const segments = await dbGetSegments(currentSession.id);
+    const total = segments.reduce((a,s)=>a+(s.size||0),0);
+    ui.segmentCount.textContent = String(segments.length);
+    ui.storedSize.textContent = formatBytes(total);
+    ui.downloadAllBtn.disabled = segments.length === 0;
+    ui.exportMetaBtn.disabled = false;
+
+    if (!segments.length){
+      ui.segmentsList.className = "empty";
+      ui.segmentsList.textContent = "Aún no hay segmentos guardados en esta sesión.";
+      return;
+    }
+
+    ui.segmentsList.className = "";
+    ui.segmentsList.innerHTML = "";
+    for (const s of segments){
+      const row = document.createElement("div");
+      row.className = "segment";
+
+      const left = document.createElement("div");
+      const title = document.createElement("b");
+      title.textContent = `Segmento ${String(s.index).padStart(2,"0")}`;
+      const meta = document.createElement("small");
+      meta.textContent = `${formatDuration(s.startMs)} – ${formatDuration(s.endMs)} · ${formatBytes(s.size)}`;
+      left.append(title,meta);
+
+      const btn = document.createElement("button");
+      btn.className = "light";
+      btn.textContent = "Descargar";
+      btn.addEventListener("click",()=>downloadSegment(s));
+
+      row.append(left,btn);
+      ui.segmentsList.appendChild(row);
+    }
+  }
+
+  function extensionFromMime(mime){
+    if ((mime||"").includes("mp4")) return "m4a";
+    if ((mime||"").includes("ogg")) return "ogg";
+    return "webm";
+  }
+
+  function triggerDownload(blob,filename){
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1500);
+  }
+
+  function segmentFileName(s){
+    const p = safeName(currentSession?.projectName);
+    const c = safeName(currentSession?.intervieweeCode);
+    const ext = extensionFromMime(s.mimeType);
+    return `${p}_${c}_seg_${String(s.index).padStart(3,"0")}.${ext}`;
+  }
+
+  function downloadSegment(s){
+    triggerDownload(s.blob,segmentFileName(s));
+  }
+
+  async function downloadAll(){
+    if (!currentSession) return;
+    const segments = await dbGetSegments(currentSession.id);
+    for (let i=0;i<segments.length;i++){
+      downloadSegment(segments[i]);
+      await new Promise(r=>setTimeout(r,350));
+    }
+  }
+
+  function renderMarkers(){
+    const markers = currentSession?.markers || [];
+    if (!markers.length){
+      ui.markersBox.textContent = "Sin marcadores.";
+      return;
+    }
+    ui.markersBox.innerHTML = markers.map((m,i)=>
+      `<div>⭐ ${i+1}. ${formatDuration(m.atMs)} · ${escapeHtml(m.note || "Momento importante")}</div>`
+    ).join("");
+  }
+
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g,c=>({
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+    }[c]));
+  }
+
+  async function addMarker(){
+    if (!currentSession) return;
+    const note = prompt("Descripción breve del momento:", "Momento importante");
+    if (note === null) return;
+    currentSession.markers = currentSession.markers || [];
+    currentSession.markers.push({atMs:elapsedMs(),note:note.trim() || "Momento importante",createdAt:Date.now()});
+    await saveSession();
+    renderMarkers();
+  }
+
+  async function saveNotes(){
+    if (!currentSession){
+      alert("Las notas se asociarán a una sesión después de iniciar o cargar una entrevista.");
+      return;
+    }
+    await saveSession();
+    alert("Notas guardadas.");
+  }
+
+  async function exportMetadata(){
+    if (!currentSession) return;
+    const segments = await dbGetSegments(currentSession.id);
+    const payload = {
+      ...currentSession,
+      segments:segments.map(s=>({
+        index:s.index,
+        startMs:s.startMs,
+        endMs:s.endMs,
+        size:s.size,
+        mimeType:s.mimeType,
+        createdAt:s.createdAt,
+        fileName:segmentFileName(s)
+      }))
+    };
+    const blob = new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+    triggerDownload(blob,`${safeName(currentSession.projectName)}_${safeName(currentSession.intervieweeCode)}_ficha.json`);
+  }
+
+  async function persistStorage(){
+    try{
+      if (navigator.storage && navigator.storage.persist){
+        await navigator.storage.persist();
+      }
+    }catch(e){}
+  }
+
+  document.addEventListener("visibilitychange", async () => {
+    if (document.visibilityState === "visible" && recorder && recorder.state !== "inactive"){
+      await requestWakeLock();
+    }
+  });
+
+  window.addEventListener("beforeunload", e => {
+    if (recorder && recorder.state !== "inactive"){
+      e.preventDefault();
+      e.returnValue = "";
+    }
+  });
+
+  ui.startBtn.addEventListener("click",startRecording);
+  ui.pauseBtn.addEventListener("click",pauseRecording);
+  ui.resumeBtn.addEventListener("click",resumeRecording);
+  ui.finishBtn.addEventListener("click",finishRecording);
+  ui.markerBtn.addEventListener("click",addMarker);
+  ui.saveNotesBtn.addEventListener("click",saveNotes);
+  ui.downloadAllBtn.addEventListener("click",downloadAll);
+  ui.exportMetaBtn.addEventListener("click",exportMetadata);
+
+  (async function init(){
+    try{
+      db = await openDB();
+      await persistStorage();
+      await refreshSavedSessions();
+      renderMarkers();
+      if (!window.isSecureContext){
+        setStatus("Aviso: abre esta aplicación mediante HTTPS para usar el micrófono", "paused");
+      }
+    }catch(e){
+      console.error(e);
+      ui.savedSessions.textContent = "No se pudo abrir el almacenamiento local del navegador.";
+    }
+  })();
+})();
+</script>
+</body>
+</html>
