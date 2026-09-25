@@ -181,6 +181,7 @@
       align-items:center;
     }
     .segment small{display:block;color:var(--muted)}
+    .segment > div:first-child{flex:1;min-width:170px}
     .segment button{
       min-height:40px;
       padding:8px 11px;
@@ -212,7 +213,7 @@
 <div class="wrap">
   <section class="card">
     <h1>Entrevistas de Investigación</h1>
-    <div class="muted">Grabadora móvil para sesiones largas con respaldo local por segmentos.</div>
+    <div class="muted">Grabadora móvil con bloques independientes y recuperación de audios de la versión 1.</div>
 
     <div class="row">
       <div>
@@ -287,8 +288,11 @@
   <section class="card">
     <h2>Segmentos de audio guardados</h2>
     <div id="segmentsList" class="empty">Aún no hay segmentos guardados en esta sesión.</div>
+    <p id="formatInfo" class="muted">El formato depende de los códecs que admite este navegador. Los audios nuevos se cierran como archivos independientes.</p>
     <div class="toolbar">
-      <button id="downloadAllBtn" class="light" disabled>⬇ Descargar todos</button>
+      <button id="downloadAllBtn" class="light" disabled>⬇ Descargar bloques</button>
+      <button id="legacyCompleteBtn" class="light" disabled>Recuperar audio completo de V1</button>
+      <button id="legacyShareBtn" class="light" disabled>Compartir audio completo de V1</button>
       <button id="exportMetaBtn" class="light" disabled>📄 Exportar ficha JSON</button>
     </div>
   </section>
@@ -299,7 +303,7 @@
   </section>
 
   <div class="footer">
-    Versión 1 · Grabación local. La transcripción automática se añadirá en la siguiente versión.
+    Versión 1.1 · Audios cerrados por bloque. Conserva una copia antes de borrar datos del navegador.
   </div>
 </div>
 
@@ -333,11 +337,14 @@
     segmentsList: $("segmentsList"),
     downloadAllBtn: $("downloadAllBtn"),
     exportMetaBtn: $("exportMetaBtn"),
+    legacyCompleteBtn: $("legacyCompleteBtn"),
+    legacyShareBtn: $("legacyShareBtn"),
+    formatInfo: $("formatInfo"),
     savedSessions: $("savedSessions")
   };
 
   const DB_NAME = "tesina_interviews_db";
-  const DB_VERSION = 1;
+  const DB_VERSION = 2; // Compatible con la base usada por versiones posteriores del mismo origen.
   const STORE_SESSIONS = "sessions";
   const STORE_SEGMENTS = "segments";
 
@@ -357,6 +364,14 @@
   let animationFrame = null;
   let wakeLock = null;
   let finishing = false;
+  let rotating = false;
+  let rotationTimer = null;
+  let blockRecordedMs = 0;
+  let blockActiveAt = 0;
+  let writeChain = Promise.resolve();
+  let visibleSegments = [];
+  let previewURLs = [];
+  let saveFailure = false;
 
   function pad(n){ return String(n).padStart(2,"0"); }
 
@@ -401,16 +416,16 @@
     const state = recorder ? recorder.state : "inactive";
     const active = !!currentSession && state !== "inactive";
 
-    ui.startBtn.disabled = active;
-    ui.pauseBtn.disabled = state !== "recording";
-    ui.resumeBtn.disabled = state !== "paused";
-    ui.finishBtn.disabled = !active;
-    ui.markerBtn.disabled = !active;
-    ui.projectName.disabled = active;
-    ui.interviewer.disabled = active;
-    ui.intervieweeCode.disabled = active;
-    ui.segmentMinutes.disabled = active;
-    ui.consent.disabled = active;
+    ui.startBtn.disabled = active || finishing;
+    ui.pauseBtn.disabled = state !== "recording" || finishing;
+    ui.resumeBtn.disabled = state !== "paused" || finishing;
+    ui.finishBtn.disabled = !active || finishing;
+    ui.markerBtn.disabled = !active || finishing;
+    ui.projectName.disabled = active || finishing;
+    ui.interviewer.disabled = active || finishing;
+    ui.intervieweeCode.disabled = active || finishing;
+    ui.segmentMinutes.disabled = active || finishing;
+    ui.consent.disabled = active || finishing;
   }
 
   function startTimer(){
@@ -495,7 +510,7 @@
       btn.className = "light";
       btn.textContent = "Ver";
       btn.addEventListener("click", async () => {
-        if (recorder && recorder.state !== "inactive") {
+        if (finishing || (recorder && recorder.state !== "inactive")) {
           alert("Finaliza la grabación actual antes de abrir otra sesión.");
           return;
         }
@@ -522,9 +537,10 @@
 
   function chooseMimeType(){
     const candidates = [
+      "audio/mp4;codecs=mp4a.40.2",
+      "audio/mp4",
       "audio/webm;codecs=opus",
       "audio/webm",
-      "audio/mp4",
       "audio/ogg;codecs=opus"
     ];
     return candidates.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
@@ -587,243 +603,284 @@
   async function saveSession(){
     if (!currentSession) return;
     currentSession.notes = ui.notes.value;
-    currentSession.durationMs = elapsedMs();
-    currentSession.totalPausedMs = totalPausedMs;
-    currentSession.segmentCount = chunkIndex;
+    if ((recorder && recorder.state !== "inactive") || finishing) currentSession.durationMs = elapsedMs();
+    if (currentSession.recordingMode === "independent") currentSession.totalPausedMs = totalPausedMs;
     currentSession.updatedAt = Date.now();
     await dbPut(STORE_SESSIONS,currentSession);
   }
 
-  async function startRecording(){
-    if (!ui.consent.checked){
-      alert("Debes confirmar la autorización para grabar antes de iniciar.");
-      return;
-    }
-    if (!ui.projectName.value.trim() || !ui.interviewer.value.trim() || !ui.intervieweeCode.value.trim()){
-      alert("Completa Proyecto/Tesina, Entrevistador y Código del entrevistado.");
-      return;
-    }
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder){
-      alert("Este navegador no ofrece las funciones necesarias para grabar audio.");
-      return;
-    }
-
-    try{
-      mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio:{
-          echoCancellation:true,
-          noiseSuppression:true,
-          autoGainControl:true,
-          channelCount:1
-        },
-        video:false
-      });
-
-      const now = Date.now();
-      const id = `ENT-${now}-${Math.random().toString(36).slice(2,7)}`;
-      const mimeType = chooseMimeType();
-      currentSession = {
-        id,
-        projectName:ui.projectName.value.trim(),
-        interviewer:ui.interviewer.value.trim(),
-        intervieweeCode:ui.intervieweeCode.value.trim(),
-        startedAt:now,
-        endedAt:null,
-        status:"recording",
-        mimeType,
-        notes:ui.notes.value,
-        markers:[],
-        durationMs:0,
-        totalPausedMs:0,
-        segmentCount:0,
-        bytes:0,
-        segmentMinutes:Number(ui.segmentMinutes.value) || 5
-      };
-
-      startedAt = now;
-      totalPausedMs = 0;
-      pauseStartedAt = 0;
-      chunkIndex = 0;
-      chunkStartElapsedMs = 0;
-      finishing = false;
-
-      recorder = mimeType
-        ? new MediaRecorder(mediaStream,{mimeType,audioBitsPerSecond:64000})
-        : new MediaRecorder(mediaStream,{audioBitsPerSecond:64000});
-
-      recorder.addEventListener("dataavailable", async e => {
-        if (!e.data || e.data.size === 0 || !currentSession) return;
-        const endMs = elapsedMs();
-        chunkIndex += 1;
-        const segment = {
-          id:`${currentSession.id}-SEG-${String(chunkIndex).padStart(4,"0")}`,
-          sessionId:currentSession.id,
-          index:chunkIndex,
-          createdAt:Date.now(),
-          startMs:chunkStartElapsedMs,
-          endMs,
-          size:e.data.size,
-          mimeType:e.data.type || currentSession.mimeType || "audio/webm",
-          blob:e.data
-        };
-        chunkStartElapsedMs = endMs;
-        await dbPut(STORE_SEGMENTS,segment);
-        currentSession.segmentCount = chunkIndex;
-        currentSession.bytes = (currentSession.bytes || 0) + e.data.size;
-        await saveSession();
-        await refreshSegments();
-      });
-
-      recorder.addEventListener("pause", async () => {
-        pauseStartedAt = Date.now();
-        currentSession.status = "paused";
-        setStatus("Grabación pausada", "paused");
-        await saveSession();
-        updateControls();
-      });
-
-      recorder.addEventListener("resume", async () => {
-        if (pauseStartedAt){
-          totalPausedMs += Date.now() - pauseStartedAt;
-          pauseStartedAt = 0;
-        }
-        currentSession.status = "recording";
-        setStatus("Grabando", "recording");
-        await saveSession();
-        updateControls();
-      });
-
-      recorder.addEventListener("stop", async () => {
-        if (pauseStartedAt){
-          totalPausedMs += Date.now() - pauseStartedAt;
-          pauseStartedAt = 0;
-        }
-        if (currentSession){
-          currentSession.status = "finished";
-          currentSession.endedAt = Date.now();
-          currentSession.durationMs = elapsedMs();
-          await saveSession();
-        }
-        stopTimer();
-        stopAudioMeter();
-        await releaseWakeLock();
-        if (mediaStream){
-          mediaStream.getTracks().forEach(t=>t.stop());
-          mediaStream = null;
-        }
-        setStatus("Entrevista finalizada y guardada", "ready");
-        updateControls();
-        await refreshSegments();
-        await refreshSavedSessions();
-        finishing = false;
-      });
-
-      recorder.addEventListener("error", async e => {
-        console.error("MediaRecorder error", e);
-        setStatus("Se produjo un error de grabación", "paused");
-        if (currentSession){
-          currentSession.status = "error";
-          await saveSession();
-        }
-      });
-
-      await dbPut(STORE_SESSIONS,currentSession);
-
-      const sliceMs = currentSession.segmentMinutes * 60 * 1000;
-      recorder.start(sliceMs);
-
-      ui.sessionCode.textContent = id.slice(-8);
-      ui.timer.textContent = "00:00:00";
-      setStatus("Grabando", "recording");
-      startTimer();
-      setupAudioMeter(mediaStream);
-      requestWakeLock();
-      updateControls();
-      await refreshSegments();
-      await refreshSavedSessions();
-    }catch(err){
-      console.error(err);
-      alert("No se pudo iniciar el micrófono. Verifica el permiso del navegador y que la página se abra mediante HTTPS.");
-    }
+  function clearRotation(){
+    if (rotationTimer) clearTimeout(rotationTimer);
+    rotationTimer = null;
   }
 
-  async function pauseRecording(){
+  function scheduleRotation(){
+    clearRotation();
     if (!recorder || recorder.state !== "recording") return;
-    try{
-      recorder.requestData();
-    }catch(e){}
-    recorder.pause();
-  }
-
-  async function resumeRecording(){
-    if (!recorder || recorder.state !== "paused") return;
-    recorder.resume();
-  }
-
-  async function finishRecording(){
-    if (!recorder || recorder.state === "inactive" || finishing) return;
-    if (!confirm("¿Finalizar la entrevista? La grabación se cerrará y quedará guardada en este dispositivo.")) return;
-    finishing = true;
-    setStatus("Guardando último segmento…", "paused");
-    try{
-      if (recorder.state === "paused"){
-        recorder.resume();
-        if (pauseStartedAt){
-          totalPausedMs += Date.now() - pauseStartedAt;
-          pauseStartedAt = 0;
-        }
+    blockActiveAt = Date.now();
+    const remaining = Math.max(100, currentSession.segmentMinutes * 60000 - blockRecordedMs);
+    const owner = recorder;
+    rotationTimer = setTimeout(() => {
+      if (owner === recorder && owner.state === "recording" && !finishing){
+        blockRecordedMs += Date.now() - blockActiveAt;
+        blockActiveAt = 0;
+        rotating = true;
+        owner.stop();
       }
-      recorder.stop();
-    }catch(e){
-      finishing = false;
-      console.error(e);
+    }, remaining);
+  }
+
+  function startBlock(){
+    if (!mediaStream?.active || finishing) throw new Error("Micrófono no disponible");
+    const type = chooseMimeType();
+    const owner = currentSession;
+    const index = ++chunkIndex;
+    const begin = elapsedMs();
+    const options = type ? {mimeType:type,audioBitsPerSecond:64000} : {audioBitsPerSecond:64000};
+    const r = new MediaRecorder(mediaStream, options);
+    let parts = [];
+    recorder = r;
+    blockRecordedMs = 0;
+    r.addEventListener("dataavailable", e => {if (e.data?.size) parts.push(e.data)});
+    r.addEventListener("pause", async () => {
+      if (blockActiveAt) blockRecordedMs += Date.now() - blockActiveAt;
+      blockActiveAt = 0;
+      clearRotation();
+      pauseStartedAt = Date.now();
+      owner.status = "paused";
+      setStatus("Grabación pausada", "paused");
+      await saveSession().catch(e => setStatus("Error guardando pausa: " + e.message, "paused"));
+      updateControls();
+    });
+    r.addEventListener("resume", async () => {
+      if (pauseStartedAt){totalPausedMs += Date.now() - pauseStartedAt;pauseStartedAt = 0}
+      owner.status = "recording";
+      setStatus("Grabando", "recording");
+      scheduleRotation();
+      await saveSession().catch(e => setStatus("Error guardando reanudación: " + e.message, "paused"));
+      updateControls();
+    });
+    r.addEventListener("error", e => {
+      console.error("MediaRecorder error",e);
+      clearRotation();
+      finishing = true;saveFailure = true;
+      rotating = false;
+      setStatus("Error de grabación: descarga los bloques ya guardados.", "paused");
+      try{if(r.state !== "inactive")r.stop()}catch{}
+    });
+    r.addEventListener("stop", () => {
+      clearRotation();
+      if (pauseStartedAt){totalPausedMs += Date.now() - pauseStartedAt;pauseStartedAt = 0}
+      const end = elapsedMs();
+      const blob = new Blob(parts,{type:r.mimeType || type || "audio/webm"});
+      parts = [];
+      const continueNext = rotating && !finishing && mediaStream?.active;
+      rotating = false;
+      if (continueNext){
+        try{startBlock();setStatus("Grabando · siguiente bloque", "recording")}
+        catch(e){finishing = true;setStatus("No se pudo iniciar otro bloque: " + e.message,"paused")}
+      }else{
+        recorder = null;
+      }
+      if (finishing){owner.endedAt = Date.now();owner.status = saveFailure ? "error" : "finished"}
+      writeChain = writeChain.then(async () => {
+        if (!blob.size) throw new Error("El bloque quedó vacío; revisa el micrófono");
+        const segment = {
+          id:`${owner.id}-SEG-${String(index).padStart(4,"0")}`,
+          sessionId:owner.id,index,createdAt:Date.now(),startMs:begin,endMs:end,
+          size:blob.size,mimeType:blob.type,blob
+        };
+        await dbPut(STORE_SEGMENTS, segment);
+        owner.segmentCount = index;
+        owner.bytes = (owner.bytes || 0) + blob.size;
+        await saveSession();
+        await refreshSegments();
+      }).catch(async e => {
+        finishing = true;saveFailure = true;
+        owner.status = "error";
+        setStatus("No se guardó el último bloque: " + e.message, "paused");
+        clearRotation();
+        if (recorder && recorder.state !== "inactive") try{recorder.stop()}catch{}
+        try{await dbPut(STORE_SESSIONS, owner)}catch{}
+      });
+      if (finishing){
+        writeChain.finally(async () => {
+          stopTimer();stopAudioMeter();await releaseWakeLock();
+          mediaStream?.getTracks().forEach(t=>t.stop());mediaStream = null;
+          if(owner.status === "finished")setStatus("Entrevista finalizada. Escucha y comparte un bloque de prueba.","ready");
+          recorder = null;finishing = false;updateControls();
+          await refreshSegments();await refreshSavedSessions();
+        });
+      }
+      updateControls();
+    });
+    r.start(); // Una grabación nueva por bloque: cada archivo lleva su propio encabezado.
+    scheduleRotation();
+    updateControls();
+  }
+
+  async function startRecording(){
+    if (finishing || (recorder && recorder.state !== "inactive")) return;
+    if (!ui.consent.checked){alert("Confirma la autorización para grabar.");return}
+    if (!ui.projectName.value.trim() || !ui.interviewer.value.trim() || !ui.intervieweeCode.value.trim()){
+      alert("Completa Proyecto/Tesina, Entrevistador y Código del entrevistado.");return
     }
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder){
+      alert("Necesitas un navegador compatible y HTTPS para grabar.");return
+    }
+    try{
+      mediaStream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,channelCount:1}});
+      const now = Date.now();
+      currentSession = {
+        id:`ENT-${now}-${Math.random().toString(36).slice(2,7)}`,
+        projectName:ui.projectName.value.trim(),interviewer:ui.interviewer.value.trim(),
+        intervieweeCode:ui.intervieweeCode.value.trim(),startedAt:now,endedAt:null,
+        status:"recording",recordingMode:"independent",notes:ui.notes.value,
+        markers:[],durationMs:0,totalPausedMs:0,segmentCount:0,bytes:0,
+        segmentMinutes:Number(ui.segmentMinutes.value)||5
+      };
+      startedAt = now;totalPausedMs = 0;pauseStartedAt = 0;chunkIndex = 0;
+      finishing = false;rotating = false;saveFailure = false;writeChain = Promise.resolve();
+      await dbPut(STORE_SESSIONS,currentSession);
+      startBlock();
+      ui.sessionCode.textContent = currentSession.id.slice(-8);
+      ui.timer.textContent = "00:00:00";
+      setStatus("Grabando · bloque independiente", "recording");
+      startTimer();setupAudioMeter(mediaStream);requestWakeLock();
+      await refreshSegments();await refreshSavedSessions();
+    }catch(e){
+      console.error(e);clearRotation();mediaStream?.getTracks().forEach(t=>t.stop());mediaStream = null;
+      recorder = null;
+      setStatus("No se pudo iniciar: " + e.message,"paused");
+      updateControls();
+    }
+  }
+
+  function pauseRecording(){if(recorder?.state === "recording")recorder.pause()}
+  function resumeRecording(){if(recorder?.state === "paused")recorder.resume()}
+
+  function finishRecording(){
+    if (!recorder || recorder.state === "inactive" || finishing) return;
+    if (!confirm("¿Finalizar la entrevista? Espera a que se guarde el último bloque.")) return;
+    finishing = true;rotating = false;clearRotation();
+    setStatus("Guardando último bloque…","paused");
+    try{recorder.stop()}catch(e){finishing = false;setStatus("Error al finalizar: " + e.message,"paused")}
+    updateControls();
+  }
+
+  function isLegacy(){
+    return currentSession && currentSession.recordingMode !== "independent" &&
+      !Object.prototype.hasOwnProperty.call(currentSession, "questions");
+  }
+
+  function completeLegacyFile(){
+    const type = visibleSegments[0]?.mimeType || currentSession?.mimeType || "audio/webm";
+    const name = `${safeName(currentSession?.projectName)}_${safeName(currentSession?.intervieweeCode)}_v1_COMPLETO.${extensionFromMime(type)}`;
+    return {file:new File(visibleSegments.map(x=>x.blob), name, {type}), name};
+  }
+
+  async function shareFile(blob, name, type){
+    try{
+      if (!navigator.share || !navigator.canShare){
+        alert("Este navegador no admite compartir archivos desde la página. Descarga el audio y compártelo desde Archivos como documento.");return
+      }
+      const file = blob instanceof File ? blob : new File([blob],name,{type});
+      if (!navigator.canShare({files:[file]})){
+        alert("El dispositivo no permite compartir este formato desde la web. Descárgalo y compártelo desde Archivos como documento.");return
+      }
+      await navigator.share({files:[file]});
+    }catch(e){if(e.name !== "AbortError")alert("No se pudo compartir: " + e.message)}
+  }
+
+  async function convertToWav(blob){
+    const AudioClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioClass) throw new Error("Este navegador no puede convertir audio a WAV");
+    const context = new AudioClass();
+    try{
+      const decoded = await context.decodeAudioData(await blob.arrayBuffer());
+      if (decoded.duration > 610) throw new Error("Convierte solo bloques de hasta 10 minutos");
+      const rate=16000, frames=Math.ceil(decoded.duration*rate);
+      const data=new ArrayBuffer(44 + frames*2), view=new DataView(data);
+      const word=(offset,value)=>view.setUint32(offset,value,true);
+      for (let i=0;i<4;i++)view.setUint8(i,"RIFF".charCodeAt(i));
+      word(4,36+frames*2);
+      for (let i=0;i<4;i++)view.setUint8(8+i,"WAVE".charCodeAt(i));
+      for (let i=0;i<4;i++)view.setUint8(12+i,"fmt ".charCodeAt(i));
+      word(16,16);view.setUint16(20,1,true);view.setUint16(22,1,true);
+      word(24,rate);word(28,rate*2);view.setUint16(32,2,true);view.setUint16(34,16,true);
+      for (let i=0;i<4;i++)view.setUint8(36+i,"data".charCodeAt(i));
+      word(40,frames*2);
+      const channels=Array.from({length:decoded.numberOfChannels},(_,i)=>decoded.getChannelData(i));
+      for(let i=0;i<frames;i++){
+        const source=Math.min(decoded.length-1,Math.floor(i*decoded.sampleRate/rate));
+        let sample=0;
+        for(const channel of channels)sample+=channel[source]/channels.length;
+        sample=Math.max(-1,Math.min(1,sample));
+        view.setInt16(44+i*2,sample<0?Math.round(sample*32768):Math.round(sample*32767),true);
+      }
+      return new Blob([data],{type:"audio/wav"});
+    }finally{await context.close().catch(()=>{})}
   }
 
   async function refreshSegments(){
+    previewURLs.forEach(url=>URL.revokeObjectURL(url));previewURLs = [];
     if (!currentSession){
+      visibleSegments = [];
       ui.segmentsList.className = "empty";
       ui.segmentsList.textContent = "Aún no hay segmentos guardados en esta sesión.";
-      ui.downloadAllBtn.disabled = true;
-      ui.exportMetaBtn.disabled = true;
-      ui.segmentCount.textContent = "0";
-      ui.storedSize.textContent = "0 MB";
+      ui.downloadAllBtn.disabled = ui.exportMetaBtn.disabled = true;
+      ui.legacyCompleteBtn.disabled = ui.legacyShareBtn.disabled = true;
+      ui.segmentCount.textContent = "0";ui.storedSize.textContent = "0 MB";
       return;
     }
-
     const segments = await dbGetSegments(currentSession.id);
-    const total = segments.reduce((a,s)=>a+(s.size||0),0);
+    visibleSegments = segments;
+    const legacy = isLegacy();
     ui.segmentCount.textContent = String(segments.length);
-    ui.storedSize.textContent = formatBytes(total);
-    ui.downloadAllBtn.disabled = segments.length === 0;
+    ui.storedSize.textContent = formatBytes(segments.reduce((sum,entry)=>sum+(entry.size||0),0));
+    ui.downloadAllBtn.disabled = segments.length === 0 || legacy;
     ui.exportMetaBtn.disabled = false;
-
+    ui.legacyCompleteBtn.disabled = ui.legacyShareBtn.disabled = !legacy || !segments.length;
+    ui.formatInfo.textContent = legacy
+      ? "Sesión antigua: los fragmentos descargados por separado pueden no reproducirse. Usa «Recuperar audio completo de V1»; conserva todos los fragmentos en orden."
+      : "Grabación independiente por bloque. Escucha cada bloque antes de enviarlo. Si WebM no abre en tu teléfono, pulsa «Descargar WAV» y envíalo desde Archivos como documento. WAV ocupa más espacio.";
     if (!segments.length){
       ui.segmentsList.className = "empty";
       ui.segmentsList.textContent = "Aún no hay segmentos guardados en esta sesión.";
       return;
     }
-
     ui.segmentsList.className = "";
-    ui.segmentsList.innerHTML = "";
-    for (const s of segments){
-      const row = document.createElement("div");
-      row.className = "segment";
-
-      const left = document.createElement("div");
-      const title = document.createElement("b");
-      title.textContent = `Segmento ${String(s.index).padStart(2,"0")}`;
-      const meta = document.createElement("small");
-      meta.textContent = `${formatDuration(s.startMs)} – ${formatDuration(s.endMs)} · ${formatBytes(s.size)}`;
+    ui.segmentsList.replaceChildren();
+    for (const entry of segments){
+      const row=document.createElement("div");row.className="segment";
+      const left=document.createElement("div");
+      const title=document.createElement("b");
+      title.textContent=`${legacy?'Fragmento V1':'Bloque'} ${String(entry.index).padStart(2,"0")}`;
+      const meta=document.createElement("small");
+      meta.textContent=`${formatDuration(entry.startMs)} – ${formatDuration(entry.endMs)} · ${formatBytes(entry.size)} · ${extensionFromMime(entry.mimeType)}`;
       left.append(title,meta);
-
-      const btn = document.createElement("button");
-      btn.className = "light";
-      btn.textContent = "Descargar";
-      btn.addEventListener("click",()=>downloadSegment(s));
-
-      row.append(left,btn);
-      ui.segmentsList.appendChild(row);
+      const actions=document.createElement("div");actions.className="toolbar";
+      const dl=document.createElement("button");dl.className="light";dl.textContent=legacy ? "Guardar fragmento original" : "Descargar";
+      dl.onclick=()=>downloadSegment(entry);actions.append(dl);
+      if (!legacy){
+        const player=document.createElement("audio");player.controls=true;player.preload="none";
+        const url=URL.createObjectURL(entry.blob);previewURLs.push(url);player.src=url;player.style.width="100%";
+        left.append(player);
+        const send=document.createElement("button");send.className="light";send.textContent="Compartir";
+        send.onclick=()=>shareFile(entry.blob,segmentFileName(entry),entry.mimeType);
+        actions.append(send);
+        if (window.AudioContext || window.webkitAudioContext){
+          const wav=document.createElement("button");wav.className="light";wav.textContent="Descargar WAV";
+          wav.onclick=async()=>{
+            wav.disabled=true;wav.textContent="Convirtiendo…";
+            try{const result=await convertToWav(entry.blob);
+              triggerDownload(result,segmentFileName(entry).replace(/\.[^.]+$/,".wav"));
+            }catch(e){alert("No se pudo convertir este bloque: " + e.message)}
+            finally{wav.disabled=false;wav.textContent="Descargar WAV"}
+          };actions.append(wav);
+        }
+      }
+      row.append(left,actions);ui.segmentsList.append(row);
     }
   }
 
@@ -841,7 +898,7 @@
     document.body.appendChild(a);
     a.click();
     a.remove();
-    setTimeout(()=>URL.revokeObjectURL(url),1500);
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
   }
 
   function segmentFileName(s){
@@ -948,6 +1005,14 @@
   ui.saveNotesBtn.addEventListener("click",saveNotes);
   ui.downloadAllBtn.addEventListener("click",downloadAll);
   ui.exportMetaBtn.addEventListener("click",exportMetadata);
+  ui.legacyCompleteBtn.addEventListener("click",()=>{
+    if(!isLegacy() || !visibleSegments.length)return;
+    const {file,name}=completeLegacyFile();triggerDownload(file,name);
+  });
+  ui.legacyShareBtn.addEventListener("click",()=>{
+    if(!isLegacy() || !visibleSegments.length)return;
+    const {file,name}=completeLegacyFile();shareFile(file,name,file.type);
+  });
 
   (async function init(){
     try{
