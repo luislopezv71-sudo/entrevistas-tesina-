@@ -1,81 +1,56 @@
-# Entrevistas de Investigación — versión 1
+# Entrevistas de Investigación — corrección 1.1
 
-Aplicación web para registrar entrevistas de tesina desde un celular o una computadora. Graba audio en segmentos, conserva las sesiones en el navegador y permite descargar los archivos para su respaldo. Esta primera versión funciona con un único archivo HTML y no necesita instalar paquetes.
+Archivo principal: `index.html` en la raíz del repositorio. El archivo HTML anterior contiene la misma aplicación; este paquete ya tiene el nombre necesario para GitHub Pages.
 
-> **Versión 1:** grabación y organización local. La transcripción automática no está incluida.
+## Qué se corrigió
 
-## Funciones
+En la versión 1, `MediaRecorder.start(intervalo)` entregaba fragmentos de una misma grabación. Algunos fragmentos **no son archivos reproducibles de manera independiente**. La versión 1.1 crea una grabación nueva por bloque y la cierra antes de guardarla: el navegador genera un archivo completo para cada bloque. Hay un breve intervalo entre el cierre de un bloque y el inicio del siguiente. Comprueba los audios durante una prueba antes de una entrevista real.
 
-- Ficha de proyecto, entrevistador y código del entrevistado.
-- Confirmación de que el entrevistado autorizó la grabación.
-- Grabación con controles para iniciar, pausar, reanudar y finalizar.
-- Segmentos de audio configurables cada 1, 5 o 10 minutos; el valor inicial es 5 minutos.
-- Indicador aproximado del nivel del micrófono y contador de tiempo.
-- Notas del investigador y marcadores de momentos importantes.
-- Consulta de las sesiones guardadas en el mismo navegador.
-- Descarga de cada segmento o solicitud de descarga de todos los segmentos.
-- Exportación de una ficha JSON con datos de la entrevista, notas, marcadores y lista de segmentos. **El JSON no contiene los audios.**
+- Los bloques nuevos tienen controles **Escuchar**, **Descargar**, **Compartir** y **Descargar WAV**.
+- **Compartir** abre el menú del teléfono; elige WhatsApp si aparece. Requiere HTTPS y soporte del navegador para compartir archivos.
+- El grabador prefiere `audio/mp4` cuando el navegador puede grabarlo; si no, usa `audio/webm` u `audio/ogg`. Cambiar solo la extensión del archivo no convierte el formato. WhatsApp podría tratar algunos WebM como documentos, sin reproducirlos dentro del chat. **Descargar WAV** convierte un bloque nuevo a audio PCM mono de 16 kHz en el teléfono; ocupa aproximadamente 1.9 MB por minuto y puede compartirse desde Archivos como documento. Algunas apps móviles pueden seguir sin mostrar un reproductor integrado.
+- Los enlaces de descarga tardan un minuto en revocarse, para dar tiempo al sistema móvil a guardar archivos grandes.
+- Se abre la base de datos en su versión 2 para convivir con otras versiones de la aplicación en el mismo dominio.
 
-## Tecnologías y etiquetas
+## Cómo recuperar grabaciones antiguas de la versión 1
 
-| Componente | Uso en la versión 1 |
-| --- | --- |
-| HTML5 y CSS3 | Interfaz adaptable a pantallas móviles. |
-| JavaScript | Controles de grabación y gestión de sesiones. |
-| MediaDevices y MediaRecorder | Acceso al micrófono y grabación del audio. |
-| IndexedDB | Almacenamiento local de sesiones y segmentos. |
-| Web Audio API | Indicador aproximado de entrada del micrófono. |
-| Screen Wake Lock API | Solicitud de mantener la pantalla activa cuando el navegador lo permite. |
+1. Abre **esta versión 1.1 en el mismo navegador, perfil y celular** donde grabaste. No borres datos del sitio.
+2. En **Sesiones recuperables**, pulsa **Ver** en la entrevista antigua.
+3. Pulsa **Recuperar audio completo de V1**. El programa une los fragmentos almacenados **en orden**, sin recodificarlos. Descarga el archivo y comprueba que se reproduce hasta el final.
+4. También puedes pulsar **Compartir audio completo de V1**. Si WhatsApp no lo admite como audio, elige la opción **Documento** desde la aplicación de archivos del teléfono.
+5. Conserva los fragmentos originales hasta comprobar el archivo recuperado. Si algún fragmento nunca llegó a almacenarse, no podrá recuperarse.
 
-**Lenguajes:** HTML, CSS y JavaScript. **Dependencias:** ninguna. **Servidor propio:** no requerido para la versión 1.
+Los fragmentos antiguos individualmente descargados pueden continuar sin abrir: la recuperación necesita todos los fragmentos que permanezcan en la base de datos del celular. Unirlos no cambia el códec. Si el archivo completo se reproduce en el navegador pero no en WhatsApp, conviértelo en una computadora a MP3 o M4A con una herramienta de audio y escucha el resultado antes de enviarlo. **La versión 1.1 no convierte audio a MP3.**
 
-**Descripción sugerida para GitHub:** Grabadora web de entrevistas académicas con segmentos de audio, respaldo local en IndexedDB y exportación de metadatos.
-
-**Topics sugeridos para GitHub:** `entrevistas`, `tesina`, `investigacion`, `grabadora`, `audio`, `html`, `css`, `javascript`, `mediarecorder`, `indexeddb`, `github-pages`.
-
-**Etiqueta de versión sugerida:** `v1.0.0`.
-
-## Archivos del repositorio
+## Estructura para la raíz del repositorio
 
 ```text
-README.md
-entrevistas_tesina_v1.html
+index.html             → aplicación 1.1 (reemplaza el index.html anterior)
+README.md              → documentación actualizada (reemplaza el README.md anterior)
+verificar_grabaciones.html → consulta local de todas las sesiones y bloques
+v2/                   → conservar sin cambios
+v4/                   → conservar sin cambios
 ```
 
-El código de la aplicación está dentro de `entrevistas_tesina_v1.html`: incluye el estilo CSS y el JavaScript, por lo que no requiere carpetas adicionales.
+La aplicación usa el mismo origen de GitHub Pages y la misma base local `tesina_interviews_db`; subir estos dos archivos no borra por sí mismo las entrevistas del dispositivo. Antes de cambios en el navegador, descarga y comprueba tus audios.
 
-## Publicación en GitHub Pages
+## Comprobar sesiones que no aparecen
 
-1. Crea un repositorio y sube `README.md` y `entrevistas_tesina_v1.html` a su raíz.
-2. En la configuración del repositorio, abre **Settings → Pages** y selecciona la publicación desde la rama principal y la carpeta raíz.
-3. Abre la URL publicada y añade `/entrevistas_tesina_v1.html` al final. Por ejemplo: `https://USUARIO.github.io/REPOSITORIO/entrevistas_tesina_v1.html`.
-4. Desde el celular, acepta el permiso del micrófono y haz una grabación breve de prueba. Descarga y reproduce el archivo resultante antes de realizar una entrevista real.
+La interfaz anterior mostraba solo las **20 sesiones más recientes**. Se eliminó ese límite; ahora lista todas las sesiones que continúen guardadas en IndexedDB.
 
-GitHub Pages sirve el archivo HTML mediante HTTPS. También se puede usar otro alojamiento HTTPS compatible con archivos estáticos. Abrir el archivo directamente desde el almacenamiento del celular puede impedir el acceso al micrófono, según el navegador.
+Para inspeccionarlas sin escribir ni borrar datos, sube `verificar_grabaciones.html` junto a `index.html` **en la raíz** del repositorio y, desde el **mismo celular, navegador y perfil** donde grabaste, abre:
 
-## Uso durante una entrevista
+`https://luislopezv71-sudo.github.io/entrevistas-tesina-/verificar_grabaciones.html`
 
-1. Escribe el nombre del proyecto, el entrevistador y un código para el entrevistado. Evita registrar el nombre completo del participante si el protocolo requiere anonimato.
-2. Elige la duración de los segmentos y confirma que la persona autorizó la grabación.
-3. Pulsa **Iniciar entrevista** y comprueba que el indicador del micrófono responde.
-4. Usa **Marcar momento importante** y **Guardar notas** para documentar hallazgos e incidencias.
-5. Pulsa **Finalizar** y espera a que se guarde el último segmento.
-6. Descarga los audios y la ficha JSON. Comprueba que los archivos existen y se reproducen fuera del navegador.
+Pulsa **Buscar sesiones y audios**. La página enumera todas las entrevistas, bloques, audios sin ficha y permite escuchar o descargar los bloques encontrados. Los audios nunca salen del dispositivo por esta comprobación. Si una ficha indica más bloques que los encontrados, los restantes no constan en esa base local; revisa la carpeta Descargas y tus respaldos. Si no aparece nada, revisa el navegador y perfil originales y que no se hayan borrado los datos del sitio. No restablezcas ni desinstales el navegador durante la búsqueda. Subir archivos al repositorio no transfiere los audios del celular a GitHub.
 
-## Almacenamiento y límites
+## Publicación y prueba rápida
 
-Los audios y las fichas se guardan en **IndexedDB del navegador y dispositivo usados**. Publicar el HTML en GitHub Pages no sube las grabaciones al repositorio. Cada navegador conserva sus propios datos: no aparecerán automáticamente al cambiar de teléfono, navegador o perfil.
+1. Extrae el ZIP y sube **`index.html`, `README.md` y `verificar_grabaciones.html` directamente a la raíz** de `luislopezv71-sudo/entrevistas-tesina-`, reemplazando los archivos existentes con esos nombres. Conserva las carpetas `v2/` y `v4/`. En GitHub, comprueba **Settings → Pages → Build and deployment: Deploy from a branch → main / (root)**. Abre `https://luislopezv71-sudo.github.io/entrevistas-tesina-/` en tu celular. La ruta `/v1/` no existe en este repositorio.
+2. Autoriza el micrófono y graba una entrevista de prueba con segmentos de **1 minuto** durante algo más de dos minutos.
+3. Finaliza y prueba **Escuchar** en cada bloque. Descarga y reproduce cada bloque desde la aplicación de archivos del celular.
+4. Prueba **Compartir** con un bloque corto. Si el navegador usa `.m4a`, WhatsApp puede aceptarlo como audio; si usa `.webm`, quizá deba enviarse como documento o convertirse a otro formato.
+5. Si el archivo original no abre en el reproductor del teléfono, usa **Descargar WAV**, comprueba que abre y adjúntalo desde WhatsApp como **Documento**. La conversión de bloques largos puede consumir memoria del celular.
+6. Solo después de estas verificaciones realiza una entrevista importante. Mantén el teléfono con espacio libre, batería suficiente y pantalla activa: la captura web puede suspenderse si el sistema bloquea la página.
 
-Mantén el teléfono con batería suficiente y, en lo posible, la pantalla activa. El bloqueo de pantalla, la suspensión del navegador, el cierre de la pestaña o la falta de espacio pueden interrumpir la captura. El último segmento que todavía no haya sido entregado y guardado puede perderse. Los intervalos seleccionados son objetivos de entrega del navegador y pueden retrasarse.
-
-El botón **Descargar todos** solicita varias descargas; algunos navegadores pueden bloquearlas. Si ocurre, usa **Descargar** en cada segmento. La ficha JSON sirve para documentar la sesión, pero **no sustituye el respaldo de los audios**. No borres los datos del sitio antes de verificar tus copias.
-
-Esta versión muestra sesiones anteriores y sus segmentos guardados; **no continúa automáticamente una grabación interrumpida**. Para entrevistas de una hora o más, realiza primero una prueba completa con el celular y navegador que usarás en campo.
-
-## Privacidad y consentimiento
-
-La casilla de autorización registra la confirmación hecha por quien entrevista; no sustituye el consentimiento informado ni el protocolo de resguardo de datos del proyecto. Conserva audios y copias de seguridad de acuerdo con las reglas de tu institución y limita el acceso a las personas autorizadas.
-
-## Alcance de la versión 1
-
-No incluye transcripción automática, identificación de hablantes, sincronización entre dispositivos ni copia de seguridad en la nube. El repositorio contiene la aplicación web; los datos de entrevistas deben resguardarse por separado.
+La confirmación de consentimiento de la aplicación no sustituye los formatos o políticas de tu estudio. Al compartir archivos por WhatsApp, el contenido pasa a las personas o servicios elegidos; hazlo solo si el consentimiento y protocolo de resguardo lo permiten.

@@ -495,7 +495,7 @@
     }
     ui.savedSessions.className = "";
     ui.savedSessions.innerHTML = "";
-    for (const s of sessions.slice(0,20)){
+    for (const s of sessions){
       const div = document.createElement("div");
       div.className = "segment";
       const left = document.createElement("div");

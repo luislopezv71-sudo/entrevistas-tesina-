@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verificar grabaciones de entrevistas</title>
+<style>:root{font:16px system-ui,sans-serif;color:#173041;background:#eef3f5}*{box-sizing:border-box}body{margin:0}.wrap{max-width:900px;margin:auto;padding:18px}header,.card{background:white;border-radius:13px;padding:18px;margin:0 0 14px;box-shadow:0 2px 9px #1233}header{background:#12334a;color:white}h1{font-size:1.6rem;margin:0 0 10px}h2{font-size:1.1rem}p{line-height:1.45}.note{background:#f4f8f9;padding:12px;border-radius:7px}.warning{background:#fff1d7;padding:12px;border-radius:7px}button{padding:10px 14px;border:0;border-radius:8px;background:#0c6282;color:white;font:inherit;margin:4px;cursor:pointer;min-height:44px}button:disabled{opacity:.5}.row{padding:12px 0;border-top:1px solid #dde8ed}.small{color:#435969;font-size:.9rem;overflow-wrap:anywhere}audio{width:100%;margin-top:8px}details{margin:8px 0}summary{cursor:pointer;padding:6px 0}.hidden{display:none}</style></head>
+<body><main class="wrap"><header><h1>Verificar grabaciones guardadas</h1><p>Consulta local de las entrevistas de la aplicación. Esta página no borra ni modifica los audios.</p></header>
+<section class="card"><h2>Antes de revisar</h2><p class="note">Abre esta página desde <b>el mismo navegador, perfil y celular</b> en que hiciste la grabación. Debe estar publicada bajo <code>https://luislopezv71-sudo.github.io/entrevistas-tesina-/</code>. Si la abres como archivo descargado, no tendrá acceso a esas grabaciones.</p><p class="small">Ubicación actual: <span id="origin"></span></p><button id="check">Buscar sesiones y audios</button><p id="status" role="status">Esperando comprobación.</p></section>
+<section id="results" class="card hidden"><h2>Resultados</h2><p id="summary"></p><div id="sessions"></div><div id="orphans"></div></section>
+<section class="card"><h2>Si faltan grabaciones</h2><p>Prueba el navegador y perfil donde grabaste, sin usar modo incógnito. Revisa también la carpeta Descargas o Archivos del celular. No borres los datos del sitio ni reinstales el navegador mientras buscas. Si aquí aparecen sesiones pero faltan bloques, consulta el estado y el número de audios de cada una; una sesión puede existir aunque su último bloque no haya alcanzado a guardarse.</p></section></main>
+<script>
+(()=>{'use strict';
+const $=id=>document.getElementById(id), DB='tesina_interviews_db';
+$('origin').textContent=location.origin;
+function status(t){$('status').textContent=t}
+function fmt(t){const n=Number(t);return Number.isFinite(n)&&n>0?new Date(n).toLocaleString('es-MX'):'Fecha no disponible'}
+function size(n){return ((Number(n)||0)/1048576).toFixed(2)+' MB'}
+function filename(s,a){const safe=x=>String(x||'sin_codigo').replace(/[^\p{L}\p{N}_-]+/gu,'_').slice(0,48);const m=String(a.mimeType||a.blob?.type||'');const ext=m.includes('mp4')?'m4a':m.includes('ogg')?'ogg':'webm';return `${safe(s?.projectName)}_${safe(s?.intervieweeCode)}_${String(a.index||0).padStart(3,'0')}.${ext}`}
+function openExisting(){return new Promise(async(resolve,reject)=>{
+ try{
+  if('databases' in indexedDB){const names=await indexedDB.databases();if(!names.some(x=>x.name===DB))return resolve(null)}
+  let missing=false,req=indexedDB.open(DB);
+  req.onupgradeneeded=e=>{missing=true;e.target.transaction.abort()};
+  req.onerror=()=>missing?resolve(null):reject(req.error||Error('No se pudo abrir el almacenamiento'));
+  req.onsuccess=()=>resolve(req.result);
+  req.onblocked=()=>reject(Error('Cierra otras pestañas de la aplicación y vuelve a intentarlo'));
+ }catch(e){reject(e)}
+})}
+function all(db,name){return new Promise((resolve,reject)=>{
+ try{if(!db.objectStoreNames.contains(name))return resolve([]);const req=db.transaction(name,'readonly').objectStore(name).getAll();req.onsuccess=()=>resolve(req.result||[]);req.onerror=()=>reject(req.error)}catch(e){reject(e)}
+})}
+function audioRow(a,s){const div=document.createElement('div');div.className='row';const info=document.createElement('div');info.textContent=`Bloque ${a.index??'?'} · ${fmt(a.createdAt)} · ${size(a.blob?.size||a.size)} · ${a.mimeType||a.blob?.type||'formato desconocido'}`;div.append(info);
+ if(a.blob instanceof Blob&&a.blob.size){const play=document.createElement('button');play.textContent='Escuchar';play.onclick=()=>{let player=div.querySelector('audio');if(player)return;player=document.createElement('audio');player.controls=true;player.src=URL.createObjectURL(a.blob);div.append(player)};div.append(play);const dl=document.createElement('button');dl.textContent='Descargar audio';dl.onclick=()=>{const url=URL.createObjectURL(a.blob),link=document.createElement('a');link.href=url;link.download=filename(s,a);document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000)};div.append(dl)}else{const text=document.createElement('p');text.className='warning';text.textContent='Este registro no contiene un archivo de audio descargable.';div.append(text)}return div}
+$('check').onclick=async()=>{const btn=$('check');btn.disabled=true;status('Buscando en este navegador…');$('results').classList.add('hidden');$('sessions').replaceChildren();$('orphans').replaceChildren();
+ try{
+  if(location.protocol!=='https:'||location.hostname!=='luislopezv71-sudo.github.io'||!location.pathname.startsWith('/entrevistas-tesina-/'))throw Error('Publica y abre esta página desde la URL de GitHub Pages del mismo repositorio.');
+  const db=await openExisting();if(!db){status('No existe la base de entrevistas en este navegador y perfil. Comprueba el dispositivo y perfil originales.');return}
+  try{
+   const [sessions,segments]=await Promise.all([all(db,'sessions'),all(db,'segments')]);sessions.sort((a,b)=>(Number(b.startedAt)||0)-(Number(a.startedAt)||0));const grouped=new Map();for(const a of segments){const key=String(a.sessionId||'');if(!grouped.has(key))grouped.set(key,[]);grouped.get(key).push(a)}for(const items of grouped.values())items.sort((a,b)=>(a.index||0)-(b.index||0));
+   $('summary').textContent=`${sessions.length} entrevistas · ${segments.length} bloques registrados · ${size(segments.reduce((n,a)=>n+(a.blob?.size||a.size||0),0))} en audios.`;
+   $('results').classList.remove('hidden');
+   if(!sessions.length&&!segments.length){status('No se encontraron entrevistas en este navegador. Comprueba el celular y navegador donde grabaste.');return}
+   for(const s of sessions){const items=grouped.get(String(s.id))||[],d=document.createElement('details'),title=document.createElement('summary');title.textContent=`${s.intervieweeCode||'Sin código'} · ${s.projectName||'Sin proyecto'} · ${fmt(s.startedAt)} · ${items.length} bloques`;d.append(title);const p=document.createElement('p');p.className='small';p.textContent=`Estado: ${s.status||'sin estado'} · identificador: ${s.id} · bloques que indica la ficha: ${s.segmentCount||0}`;d.append(p);if(!items.length){const note=document.createElement('p');note.className='warning';note.textContent='Existe la ficha, pero no se encontraron bloques guardados para esta entrevista.';d.append(note)}for(const a of items)d.append(audioRow(a,s));$('sessions').append(d)}
+   const known=new Set(sessions.map(s=>String(s.id))),orphan=segments.filter(a=>!known.has(String(a.sessionId)));
+   if(orphan.length){const h=document.createElement('h2');h.textContent=`Audios sin ficha de entrevista (${orphan.length})`;$('orphans').append(h);for(const a of orphan)$('orphans').append(audioRow(a,null))}
+   status('Consulta terminada. Abre las entrevistas para escuchar o descargar sus audios.');
+  }finally{db.close()}
+ }catch(e){status('No se pudo completar la revisión: '+e.message)}finally{btn.disabled=false}
+};
+})();
+</script></body></html>
