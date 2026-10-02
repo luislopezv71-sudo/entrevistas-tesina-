@@ -1,7 +1,6 @@
 (()=>{'use strict';
 const $=id=>document.getElementById(id), DB='tesina_interviews_db', S='sessions', A='segments';
 let db,session=null,recorder=null,stream=null,ctx=null,analyser=null,meterFrame=0,wake=null,blockStart=0,blockTimer=0,ticker=0,checkpoint=0,runStart=0,baseMs=0,stopping=false,rotating=false,writeChain=Promise.resolve(),testURL=null,preparedWav=null;
-// [MODO SECUENCIAL] Estado del envío automático por WhatsApp
 let seqActive=false, seqAbort=false, seqWaiting=false;
 const fmt=ms=>{let s=Math.floor(Math.max(0,ms)/1000);return [Math.floor(s/3600),Math.floor(s/60)%60,s%60].map(n=>String(n).padStart(2,'0')).join(':')};
 const clean=s=>String(s||'sin_codigo').replace(/[^\p{L}\p{N}_-]+/gu,'_').slice(0,48);
@@ -26,7 +25,21 @@ const mb=n=>(Math.max(0,n)/1048576).toFixed(2)+' MB';
 const sizeText=n=>n>=1073741824?(n/1073741824).toFixed(2)+' GB':mb(n);
 const wavEstimate=a=>44+Math.ceil(Math.max(0,(Number(a.endMs)||0)-(Number(a.startMs)||0))/1000*16000)*2;
 
-// [PARCHE 3] Validación de blob al inicio de convertToWav
+// [FIX REPRODUCCIÓN] Normalizador de MIME type válido
+function safeAudioMime(m){
+ const fallback='audio/webm';
+ if(!m||typeof m!=='string')return fallback;
+ m=m.split(';')[0].trim().toLowerCase();
+ if(!m.startsWith('audio/'))return fallback;
+ if(!['audio/webm','audio/ogg','audio/mp4','audio/mpeg','audio/wav','audio/x-m4a','audio/aac'].includes(m)){
+  if(m.includes('mp4')||m.includes('m4a'))return 'audio/mp4';
+  if(m.includes('ogg'))return 'audio/ogg';
+  if(m.includes('webm'))return 'audio/webm';
+  return fallback;
+ }
+ return m;
+}
+
 async function convertToWav(blob){
  if(!blob || !(blob instanceof Blob) || blob.size===0)throw Error('El bloque no tiene audio válido. No se puede preparar WAV.');
  const AudioClass=window.AudioContext||window.webkitAudioContext;
@@ -65,16 +78,14 @@ function shareWav(){
 }
 
 /* =========================================================
-   [MODO SECUENCIAL] Envío bloque a bloque por WhatsApp
+   [MODO SECUENCIAL] Con confirmación manual
    ========================================================= */
-
 async function seqPendingBlocks(){
  if(!session)return [];
  const shared=new Set(session.sharedSegments||[]);
  const aud=await segments();
  return aud.filter(a=>a.blob&&a.blob.size>0&&!shared.has(a.id));
 }
-
 async function seqMarkShared(segmentId){
  if(!session)return;
  const set=new Set(session.sharedSegments||[]);
@@ -83,7 +94,6 @@ async function seqMarkShared(segmentId){
  session.updatedAt=Date.now();
  await put(S,{...session});
 }
-
 async function seqReset(){
  if(!session)return;
  if(!confirm('¿Reiniciar las marcas de envío? Todos los bloques volverán a aparecer como pendientes.'))return;
@@ -93,7 +103,6 @@ async function seqReset(){
  notice('Marcas de envío reiniciadas.');
  render();
 }
-
 async function seqStart(){
  if(seqActive){seqStop();return}
  if(!session)return notice('Abre una entrevista primero.','warn');
@@ -108,7 +117,6 @@ async function seqStart(){
  $('sendSeq').classList.add('danger');
  await seqLoop();
 }
-
 function seqStop(){
  seqAbort=true;
  seqActive=false;
@@ -120,7 +128,39 @@ function seqStop(){
  }
  notice('Envío secuencial detenido.','warn');
 }
-
+function seqConfirm(blockIndex, total){
+ return new Promise(resolve=>{
+  const overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  const box=document.createElement('div');
+  box.style.cssText='background:#fff;color:#172838;border-radius:14px;padding:20px;max-width:400px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.3);font-family:system-ui,sans-serif';
+  const h=document.createElement('h3');
+  h.textContent=`Bloque ${blockIndex} de ${total}`;
+  h.style.cssText='margin:0 0 10px 0;font-size:1.15rem';
+  const p=document.createElement('p');
+  p.textContent='¿Enviaste el audio en WhatsApp? Pulsa "Sí" solo si el archivo llegó al chat.';
+  p.style.cssText='margin:0 0 16px 0;line-height:1.4;color:#44586a';
+  const row=document.createElement('div');
+  row.style.cssText='display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end';
+  const btnYes=document.createElement('button');
+  btnYes.textContent='Sí, enviado';
+  btnYes.style.cssText='background:#0d6583;color:#fff;border:0;padding:11px 14px;border-radius:9px;font:inherit;cursor:pointer;min-height:44px';
+  const btnRetry=document.createElement('button');
+  btnRetry.textContent='No, repetir';
+  btnRetry.style.cssText='background:#dce9ef;color:#17384a;border:0;padding:11px 14px;border-radius:9px;font:inherit;cursor:pointer;min-height:44px';
+  const btnCancel=document.createElement('button');
+  btnCancel.textContent='Cancelar envío';
+  btnCancel.style.cssText='background:#a53731;color:#fff;border:0;padding:11px 14px;border-radius:9px;font:inherit;cursor:pointer;min-height:44px';
+  const close=(result)=>{ overlay.remove(); resolve(result); };
+  btnYes.onclick=()=>close('yes');
+  btnRetry.onclick=()=>close('retry');
+  btnCancel.onclick=()=>close('cancel');
+  row.append(btnRetry,btnCancel,btnYes);
+  box.append(h,p,row);
+  overlay.append(box);
+  document.body.append(overlay);
+ });
+}
 async function seqLoop(){
  while(seqActive && !seqAbort){
   const pending=await seqPendingBlocks();
@@ -148,43 +188,54 @@ async function seqLoop(){
   }
   preparedWav={sessionId:session.id,segmentId:a.id,blob,name:wavName(a)};
 
+  const file=new File([blob],preparedWav.name,{type:'audio/wav'});
+  const shareSupported = !!(navigator.share && navigator.canShare);
+  const fileSupported = shareSupported && navigator.canShare({files:[file]});
+  console.log('[SEQ] Bloque',a.index,'· WAV',blob.size,'bytes · share',shareSupported,'· files',fileSupported);
+
+  if(!shareSupported){
+   notice(`Bloque ${a.index}: este navegador no permite compartir archivos. Descárgalo manualmente.`,'error');
+   await seqMarkShared(a.id);
+   continue;
+  }
+  if(!fileSupported){
+   notice(`Bloque ${a.index}: el teléfono no admite compartir WAV (${mb(blob.size)}). Descárgalo manualmente.`,'error');
+   await seqMarkShared(a.id);
+   continue;
+  }
+
+  let shareResult='unknown';
   try{
-   const file=new File([blob],preparedWav.name,{type:'audio/wav'});
-   if(!navigator.canShare({files:[file]})){
-    notice(`El teléfono no admite compartir el bloque ${a.index} como WAV. Descárgalo manualmente.`,'warn');
+   await navigator.share({files:[file]});
+   shareResult='resolved';
+  }catch(e){
+   if(e.name==='AbortError'){
+    shareResult='aborted';
+   }else{
+    shareResult='error:'+e.message;
+    notice(`No se pudo compartir el bloque ${a.index}: ${e.message}`,'error');
     await seqMarkShared(a.id);
     continue;
    }
-   await navigator.share({files:[file]});
-   await seqMarkShared(a.id);
-   notice(`✅ Bloque ${a.index} enviado. Preparando siguiente…`,'');
-  }catch(e){
-   if(e.name==='AbortError'){
-    notice('Envío cancelado por el usuario. Deteniendo modo secuencial.','warn');
-    seqStop();
-    return;
-   }
-   notice(`No se pudo compartir el bloque ${a.index}: ${e.message}`,'error');
-   await seqMarkShared(a.id);
   }
+  console.log('[SEQ] Resultado del share:',shareResult);
+
+  const confirmacion = await seqConfirm(a.index, total);
+  if(confirmacion === 'cancel'){
+   notice('Envío secuencial detenido por el usuario.','warn');
+   seqStop();
+   return;
+  }
+  if(confirmacion === 'retry'){
+   notice(`Reintentando bloque ${a.index}…`,'warn');
+   continue;
+  }
+  await seqMarkShared(a.id);
+  notice(`✅ Bloque ${a.index} enviado. Preparando siguiente…`,'');
+  await render();
 
   seqWaiting=true;
-  await new Promise(res=>{
-   const onVisible=()=>{
-    if(document.visibilityState==='visible'){
-     document.removeEventListener('visibilitychange',onVisible);
-     seqWaiting=false;
-     setTimeout(res,900);
-    }
-   };
-   document.addEventListener('visibilitychange',onVisible);
-   setTimeout(()=>{
-    document.removeEventListener('visibilitychange',onVisible);
-    seqWaiting=false;
-    res();
-   },120000);
-  });
-  await render();
+  await new Promise(res=>setTimeout(()=>{seqWaiting=false;res()},600));
  }
  if(seqAbort){
   notice('Envío secuencial detenido.','warn');
@@ -198,16 +249,81 @@ async function wakeOn(){try{if(document.visibilityState==='visible'&&navigator.w
 async function cleanup(){clearInterval(blockTimer);clearInterval(ticker);clearInterval(checkpoint);blockTimer=ticker=checkpoint=0;if(meterFrame)cancelAnimationFrame(meterFrame);$('meter').value=0;try{await ctx?.close()}catch{}ctx=null;analyser=null;try{await wake?.release()}catch{}wake=null;stream?.getTracks().forEach(t=>t.stop());stream=null}
 function meterStart(){try{ctx=new (window.AudioContext||window.webkitAudioContext)();analyser=ctx.createAnalyser();analyser.fftSize=256;ctx.createMediaStreamSource(stream).connect(analyser);let data=new Uint8Array(analyser.frequencyBinCount);let draw=()=>{if(!analyser)return;analyser.getByteFrequencyData(data);$('meter').value=Math.min(100,Math.round(data.reduce((a,b)=>a+b,0)/data.length*2));meterFrame=requestAnimationFrame(draw)};draw()}catch{}}
 function beginClock(){runStart=Date.now();clearInterval(ticker);ticker=setInterval(()=>{$('timer').textContent=fmt(duration())},250);clearInterval(checkpoint);checkpoint=setInterval(()=>{save();storage()},10000)}
-function startBlock(){if(stopping||!stream?.active)return;let type=mime(),r=new MediaRecorder(stream,type?{mimeType:type,audioBitsPerSecond:64000}:{audioBitsPerSecond:64000});recorder=r;let parts=[],start=duration(),owner=session,index=(owner.segmentCount||0)+1;r.ondataavailable=e=>{if(e.data?.size)parts.push(e.data)};r.onerror=()=>{notice('Error del grabador. Revisa los bloques ya guardados.','error');stopping=true};r.onstop=()=>{let end=duration(),blob=new Blob(parts,{type:r.mimeType||type||'audio/webm'});owner.segmentCount=index;let task=queue(async()=>{if(blob.size){let row={id:`${owner.id}-SEG-${String(index).padStart(4,'0')}`,sessionId:owner.id,index,startMs:start,endMs:end,createdAt:Date.now(),size:blob.size,mimeType:blob.type,blob};await put(A,row);owner.bytes=(owner.bytes||0)+blob.size;await put(S,{...owner,notes:$('notes').value,questions:$('questions').value,durationMs:end,updatedAt:Date.now()})}else notice('Un bloque quedó vacío. Comprueba el micrófono.','warn')});if(rotating&&!stopping){rotating=false;startBlock();notice('Grabando · bloque '+(index+1))}else{recorder=null;task.then(async()=>{if(stopping){owner.status='finished';owner.endedAt=Date.now();owner.durationMs=end;try{await put(S,{...owner,notes:$('notes').value,questions:$('questions').value});notice('Entrevista finalizada. Verifica y descarga los audios.')}catch(e){owner.status='interrupted';notice('No se pudo cerrar la ficha: '+e.message,'error')}await cleanup();stopping=false;controls();render()}},async e=>{owner.status='interrupted';try{await put(S,{...owner})}catch{}await cleanup();stopping=false;notice('No se guardó el último bloque: '+e.message+'. Descarga los bloques anteriores.','error');controls();render()})}task.then(render).catch(()=>{})};r.start();blockStart=Date.now();clearInterval(blockTimer);blockTimer=setInterval(()=>{if(r.state==='recording'&&Date.now()-blockStart>=owner.segmentMinutes*60000){rotating=true;clearInterval(blockTimer);r.stop()}},1000);controls()}
+
+// [FIX REPRODUCCIÓN] startBlock: aislar parts[] y forzar MIME type válido
+function startBlock(){
+ if(stopping||!stream?.active)return;
+ let type=mime();
+ let r=new MediaRecorder(stream,type?{mimeType:type,audioBitsPerSecond:64000}:{audioBitsPerSecond:64000});
+ recorder=r;
+ let parts=[];
+ let start=duration(),owner=session,index=(owner.segmentCount||0)+1;
+ r.ondataavailable=e=>{if(e.data?.size)parts.push(e.data)};
+ r.onerror=()=>{notice('Error del grabador. Revisa los bloques ya guardados.','error');stopping=true};
+ r.onstop=()=>{
+  let end=duration();
+  // [FIX REPRODUCCIÓN] Copiar los parts y forzar un MIME válido
+  const safeMime=safeAudioMime(r.mimeType||type);
+  let blob=new Blob([...parts],{type:safeMime});
+  owner.segmentCount=index;
+  let task=queue(async()=>{
+   if(blob.size){
+    let row={
+     id:`${owner.id}-SEG-${String(index).padStart(4,'0')}`,
+     sessionId:owner.id,
+     index,
+     startMs:start,
+     endMs:end,
+     createdAt:Date.now(),
+     size:blob.size,
+     mimeType:safeMime,
+     blobType:safeMime,
+     blob
+    };
+    await put(A,row);
+    owner.bytes=(owner.bytes||0)+blob.size;
+    await put(S,{...owner,notes:$('notes').value,questions:$('questions').value,durationMs:end,updatedAt:Date.now()});
+   }else{
+    notice('Un bloque quedó vacío. Comprueba el micrófono.','warn');
+   }
+  });
+  if(rotating&&!stopping){rotating=false;startBlock();notice('Grabando · bloque '+(index+1))}
+  else{
+   recorder=null;
+   task.then(async()=>{
+    if(stopping){
+     owner.status='finished';owner.endedAt=Date.now();owner.durationMs=end;
+     try{await put(S,{...owner,notes:$('notes').value,questions:$('questions').value});notice('Entrevista finalizada. Verifica y descarga los audios.')}
+     catch(e){owner.status='interrupted';notice('No se pudo cerrar la ficha: '+e.message,'error')}
+     await cleanup();stopping=false;controls();render();
+    }
+   },async e=>{
+    owner.status='interrupted';
+    try{await put(S,{...owner})}catch{}
+    await cleanup();stopping=false;
+    notice('No se guardó el último bloque: '+e.message+'. Descarga los bloques anteriores.','error');
+    controls();render();
+   });
+  }
+  task.then(render).catch(()=>{});
+ };
+ r.start();
+ blockStart=Date.now();
+ clearInterval(blockTimer);
+ blockTimer=setInterval(()=>{
+  if(r.state==='recording'&&Date.now()-blockStart>=owner.segmentMinutes*60000){
+   rotating=true;clearInterval(blockTimer);r.stop();
+  }
+ },1000);
+ controls();
+}
 async function start(){if(!db||stopping||active())return;if(session?.status==='interrupted')return continueInterrupted();if(!($('project').value.trim()&&$('interviewer').value.trim()&&$('code').value.trim()&&$('consent').checked)){alert('Completa la ficha y confirma la autorización para grabar.');return}if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder){alert('Necesitas HTTPS y un navegador compatible con MediaRecorder.');return}try{stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true}});let now=Date.now();preparedWav=null;session={id:`ENT-${now}-${Math.random().toString(36).slice(2,8)}`,projectName:$('project').value.trim(),interviewer:$('interviewer').value.trim(),intervieweeCode:$('code').value.trim(),consent:true,startedAt:now,status:'recording',segmentMinutes:Number($('minutes').value),segmentCount:0,bytes:0,durationMs:0,markers:[],codes:[],sharedSegments:[],notes:$('notes').value,questions:$('questions').value};baseMs=0;await put(S,{...session});beginClock();startBlock();meterStart();wakeOn();notice('Grabando · primer bloque');render()}catch(e){await cleanup();notice('No se inició la grabación: '+e.message,'error')}}
 async function continueInterrupted(){if(!session||session.status!=='interrupted'||!$('consent').checked){alert('Confirma de nuevo la autorización para continuar.');return}try{stream=await navigator.mediaDevices.getUserMedia({audio:true});session.status='recording';session.interruptions=[...(session.interruptions||[]),{at:Date.now(),resumeAtMs:session.durationMs}];baseMs=session.durationMs||0;await put(S,{...session});beginClock();startBlock();meterStart();wakeOn();notice('Grabación continuada. Hay una interrupción entre bloques.','warn');render()}catch(e){await cleanup();notice('No se pudo continuar: '+e.message,'error')}}
 function pause(){if(recorder?.state!=='recording')return;clearInterval(blockTimer);baseMs=duration();recorder.pause();session.status='paused';save();notice('Pausada');controls()}
 function resume(){if(recorder?.state!=='paused')return;runStart=Date.now();blockStart=Date.now();recorder.resume();session.status='recording';save();blockTimer=setInterval(()=>{if(recorder?.state==='recording'&&Date.now()-blockStart>=session.segmentMinutes*60000){rotating=true;clearInterval(blockTimer);recorder.stop()}},1000);notice('Grabando');controls()}
 function finish(){if(!active()||stopping||!confirm('¿Finalizar esta entrevista? Espera a que el último bloque quede guardado.'))return;stopping=true;rotating=false;clearInterval(blockTimer);if(recorder.state==='paused'){recorder.resume();runStart=Date.now()}notice('Guardando último bloque…','warn');recorder.stop();controls()}
-async function testMic(){if(active()){alert('Termina la grabación antes de probar el micrófono.');return}let st,r,parts=[];try{$('test').disabled=true;$('testResult').textContent=' Grabando 5 segundos…';st=await navigator.mediaDevices.getUserMedia({audio:true});let type=mime();r=new MediaRecorder(st,type?{mimeType:type}:{});r.ondataavailable=e=>{if(e.data.size)parts.push(e.data)};r.start();await new Promise(ok=>setTimeout(ok,5000));await new Promise(ok=>{r.onstop=ok;r.stop()});if(testURL)URL.revokeObjectURL(testURL);testURL=URL.createObjectURL(new Blob(parts,{type:r.mimeType}));$('testPlayer').src=testURL;$('testPlayer').classList.remove('hidden');$('testResult').textContent=' Escucha la prueba y confirma que la voz se oye claramente.'}catch(e){$('testResult').textContent=' Error: '+e.message}finally{st?.getTracks().forEach(t=>t.stop());$('test').disabled=false}}
+async function testMic(){if(active()){alert('Termina la grabación antes de probar el micrófono.');return}let st,r,parts=[];try{$('test').disabled=true;$('testResult').textContent=' Grabando 5 segundos…';st=await navigator.mediaDevices.getUserMedia({audio:true});let type=mime();r=new MediaRecorder(st,type?{mimeType:type}:{});r.ondataavailable=e=>{if(e.data.size)parts.push(e.data)};r.start();await new Promise(ok=>setTimeout(ok,5000));await new Promise(ok=>{r.onstop=ok;r.stop()});if(testURL)URL.revokeObjectURL(testURL);testURL=URL.createObjectURL(new Blob(parts,{type:safeAudioMime(r.mimeType)}));$('testPlayer').src=testURL;$('testPlayer').classList.remove('hidden');$('testResult').textContent=' Escucha la prueba y confirma que la voz se oye claramente.'}catch(e){$('testResult').textContent=' Error: '+e.message}finally{st?.getTracks().forEach(t=>t.stop());$('test').disabled=false}}
 async function storage(){if(!navigator.storage?.estimate){$('storage').textContent='Este navegador no informa el espacio disponible para la página.';return}try{let estimate=await navigator.storage.estimate(),usage=Number(estimate.usage),quota=Number(estimate.quota);if(!Number.isFinite(usage)||!Number.isFinite(quota)||quota<=0)throw Error('Sin cuota disponible');$('storage').textContent=`Navegador para este dominio: ${sizeText(usage)} utilizados · cuota estimada ${sizeText(quota)} · disponible estimado ${sizeText(Math.max(0,quota-usage))}. Incluye otras páginas del mismo dominio.`;$('spaceMeter').value=Math.min(100,Math.round(usage/quota*100))}catch{$('storage').textContent='El navegador no pudo estimar el espacio disponible para esta página.'}}
-
-// [PARCHE 4] No perder preparedWav si es la misma sesión
 async function load(s){if(active())return alert('Finaliza la grabación actual antes de abrir otra sesión.');if(session?.id!==s.id)preparedWav=null;session=s;baseMs=s.durationMs||0;for(let [id,v] of Object.entries({project:s.projectName,interviewer:s.interviewer,code:s.intervieweeCode,notes:s.notes,questions:s.questions}))$(id).value=v||'';$('minutes').value=String(s.segmentMinutes||5);$('consent').checked=false;$('timer').textContent=fmt(s.durationMs);notice(s.status==='interrupted'?'Sesión interrumpida: audio guardado hasta el último bloque. Puedes continuar.':'Sesión cargada',s.status==='interrupted'?'warn':'');controls();render()}
 
 async function render(){
@@ -222,16 +338,12 @@ async function render(){
  let aud=session?records.filter(a=>a.sessionId===session.id).sort((a,b)=>a.index-b.index):[];
  $('segments').replaceChildren();
  let lastPrepare=null;
-
- // [MODO SECUENCIAL] Conjunto de bloques ya marcados como enviados
  const shared = new Set(session?.sharedSegments||[]);
 
- // [PARCHE 1] Render por segmento con validación de audio
  for(let a of aud){
   let row=document.createElement('div');
   row.className='row';
   let label=document.createElement('span');
-
   const hasAudio = !!(a.blob && a.blob.size>0);
   const ready = () => preparedWav?.sessionId===session?.id && preparedWav?.segmentId===a.id;
   const wavState = hasAudio
@@ -240,66 +352,64 @@ async function render(){
   const sentMark = shared.has(a.id) ? ' · ✅ enviado' : '';
   label.textContent = `Bloque ${a.index} · ${fmt(a.startMs)}–${fmt(a.endMs)} · original ${mb(audioBytes(a))} · WAV ${wavState}${sentMark}`;
 
+  // [FIX REPRODUCCIÓN] play.onclick reconstruye el blob con MIME correcto
   let play=document.createElement('button');
   play.textContent='Escuchar';
   play.className='secondary';
   play.disabled=!hasAudio;
-  play.onclick=()=>{
+  play.onclick=async()=>{
    let old=row.querySelector('audio');
    if(old){URL.revokeObjectURL(old.src);old.remove();return}
    if(!hasAudio)return notice('Este bloque no tiene audio guardado.','error');
-   let p=document.createElement('audio');
-   p.controls=true;
-   p.src=URL.createObjectURL(a.blob);
-   p.onended=()=>{};
-   row.append(p);
+   try{
+    const buf=await a.blob.arrayBuffer();
+    const declaredMime=a.mimeType||a.blobType||a.blob.type||'';
+    const mimeType=safeAudioMime(declaredMime);
+    const cleanBlob=new Blob([buf],{type:mimeType});
+    const p=document.createElement('audio');
+    p.controls=true;
+    p.preload='metadata';
+    p.src=URL.createObjectURL(cleanBlob);
+    p.onerror=()=>{
+     const err=p.error;
+     notice(`No se puede reproducir el bloque ${a.index} (${mimeType}, ${mb(buf.byteLength)}).${err?' Código '+err.code:''}`,'error');
+    };
+    p.onloadedmetadata=()=>{
+     if(!isFinite(p.duration)||p.duration===0){
+      notice(`El bloque ${a.index} tiene duración 0. Puede estar vacío o corrupto.`,'warn');
+     }
+    };
+    row.append(p);
+    try{await p.play()}catch{}
+   }catch(e){
+    notice(`No se pudo cargar el bloque ${a.index}: ${e.message}`,'error');
+   }
   };
 
   let dl=document.createElement('button');
   dl.textContent='Descargar';
   dl.className='secondary';
   dl.disabled=!hasAudio;
-  dl.onclick=()=>{ if(hasAudio)download(a.blob,filename(a)); else notice('Este bloque no tiene audio guardado.','error'); };
+  dl.onclick=()=>{
+   if(!hasAudio)return notice('Este bloque no tiene audio guardado.','error');
+   const mimeType=safeAudioMime(a.mimeType||a.blobType||a.blob.type);
+   download(new Blob([a.blob],{type:mimeType}),filename(a));
+  };
 
-  let tr=document.createElement('button');
-  tr.textContent=a.transcript?'Retranscribir en línea':'Transcribir en línea';
-  tr.className='secondary';
-  tr.disabled=!hasAudio;
-  tr.onclick=()=>transcribe(a);
-
-  let imp=document.createElement('button');
-  imp.textContent='Importar JSON offline';
-  imp.className='secondary';
-  let pick=document.createElement('input');
-  pick.type='file';
-  pick.accept='.json,application/json';
-  pick.className='hidden';
-  pick.onchange=async()=>{if(pick.files?.[0])await importOffline(a,pick.files[0]);pick.value=''};
-  imp.onclick=()=>pick.click();
-
-  let prepare=document.createElement('button');
-  prepare.className='secondary';
-  prepare.textContent='Preparar WAV';
-  prepare.disabled=!hasAudio;
-
-  let wavDownload=document.createElement('button');
-  wavDownload.className='secondary';
-  wavDownload.textContent='Descargar WAV';
-  wavDownload.disabled=!ready();
-
-  let wavShare=document.createElement('button');
-  wavShare.className='secondary';
-  wavShare.textContent='Compartir WAV';
-  wavShare.disabled=!ready();
+  let tr=document.createElement('button');tr.textContent=a.transcript?'Retranscribir en línea':'Transcribir en línea';tr.className='secondary';tr.disabled=!hasAudio;tr.onclick=()=>transcribe(a);
+  let imp=document.createElement('button');imp.textContent='Importar JSON offline';imp.className='secondary';let pick=document.createElement('input');pick.type='file';pick.accept='.json,application/json';pick.className='hidden';pick.onchange=async()=>{if(pick.files?.[0])await importOffline(a,pick.files[0]);pick.value=''};imp.onclick=()=>pick.click();
+  let prepare=document.createElement('button');prepare.className='secondary';prepare.textContent='Preparar WAV';prepare.disabled=!hasAudio;
+  let wavDownload=document.createElement('button');wavDownload.className='secondary';wavDownload.textContent='Descargar WAV';wavDownload.disabled=!ready();
+  let wavShare=document.createElement('button');wavShare.className='secondary';wavShare.textContent='Compartir WAV';wavShare.disabled=!ready();
 
   prepare.onclick=async()=>{
    if(!hasAudio){notice('Este bloque no tiene audio guardado. No se puede preparar WAV.','error');return}
    if(ready()){notice('El WAV de este bloque ya está preparado. Descárgalo o toca Compartir WAV.');return}
-   prepare.disabled=true;
-   prepare.textContent='Preparando WAV…';
-   const owner=session?.id;
+   prepare.disabled=true;prepare.textContent='Preparando WAV…';const owner=session?.id;
    try{
-    const blob=await convertToWav(a.blob);
+    const mimeType=safeAudioMime(a.mimeType||a.blobType||a.blob.type);
+    const cleanBlob=new Blob([a.blob],{type:mimeType});
+    const blob=await convertToWav(cleanBlob);
     if(session?.id!==owner){notice('Cambiaste de sesión durante la conversión. Abre el bloque de nuevo.','warn');return}
     preparedWav={sessionId:owner,segmentId:a.id,blob,name:wavName(a)};
     wavDownload.disabled=wavShare.disabled=false;
@@ -317,7 +427,6 @@ async function render(){
   lastPrepare=prepare;
  }
 
- // [PARCHE 2] Botones globales: último bloque con audio válido
  const lastValidBlock = [...aud].reverse().find(x => x.blob && x.blob.size>0);
  $('prepareLatest').disabled = !lastValidBlock;
  $('prepareLatest').onclick = () => {
@@ -335,7 +444,6 @@ async function render(){
  $('shareLatest').disabled = !(preparedWav?.sessionId===session?.id);
  $('shareLatest').onclick = shareWav;
 
- // [MODO SECUENCIAL] Estado de los botones y hooks
  const validBlocks = aud.filter(x=>x.blob&&x.blob.size>0);
  $('sendSeq').disabled = !session || !validBlocks.length || active();
  $('sendSeq').onclick = seqStart;
@@ -399,7 +507,7 @@ async function render(){
  storage();
 }
 
-async function transcribe(a){let endpoint=$('server').value.trim().replace(/\/$/,'');if(!endpoint||!/^https:\/\//i.test(endpoint)){alert('Configura la URL HTTPS de transcribe.php.');return}if(!$('token').value)return alert('Escribe la clave de acceso del servidor.');if(!confirm('¿Enviar este bloque de audio al servidor configurado para transcribirlo?'))return;notice('Transcribiendo bloque '+a.index+'…');try{let fd=new FormData();fd.append('audio',a.blob,filename(a));let u=new URL(endpoint);if(u.protocol!=='https:'||u.username||u.password||u.search||u.hash||!u.pathname.endsWith('.php'))throw Error('Escribe la URL completa de transcribe.php por HTTPS');let r=await fetch(u.href,{method:'POST',headers:{Authorization:'Bearer '+$('token').value},body:fd});if(!r.ok)throw Error((await r.text()).slice(0,250));let data=await r.json();if(!Array.isArray(data.segments))throw Error('Respuesta inesperada');a.transcript=data.segments.map(x=>({start:Number(x.start)||0,end:Number(x.end)||0,speaker:String(x.speaker||'Sin identificar'),text:String(x.text||'')}));await put(A,a);notice('Transcripción guardada en este dispositivo. Revisa los hablantes con el audio.');render()}catch(e){notice('No se pudo transcribir: '+e.message,'error')}}
+async function transcribe(a){let endpoint=$('server').value.trim().replace(/\/$/,'');if(!endpoint||!/^https:\/\//i.test(endpoint)){alert('Configura la URL HTTPS de transcribe.php.');return}if(!$('token').value)return alert('Escribe la clave de acceso del servidor.');if(!confirm('¿Enviar este bloque de audio al servidor configurado para transcribirlo?'))return;notice('Transcribiendo bloque '+a.index+'…');try{let fd=new FormData();const mimeType=safeAudioMime(a.mimeType||a.blobType||a.blob.type);fd.append('audio',new Blob([a.blob],{type:mimeType}),filename(a));let u=new URL(endpoint);if(u.protocol!=='https:'||u.username||u.password||u.search||u.hash||!u.pathname.endsWith('.php'))throw Error('Escribe la URL completa de transcribe.php por HTTPS');let r=await fetch(u.href,{method:'POST',headers:{Authorization:'Bearer '+$('token').value},body:fd});if(!r.ok)throw Error((await r.text()).slice(0,250));let data=await r.json();if(!Array.isArray(data.segments))throw Error('Respuesta inesperada');a.transcript=data.segments.map(x=>({start:Number(x.start)||0,end:Number(x.end)||0,speaker:String(x.speaker||'Sin identificar'),text:String(x.text||'')}));await put(A,a);notice('Transcripción guardada en este dispositivo. Revisa los hablantes con el audio.');render()}catch(e){notice('No se pudo transcribir: '+e.message,'error')}}
 function normalizeTranscript(data){if(!Array.isArray(data?.segments)||!data.segments.length||data.segments.length>5000)throw Error('El JSON debe contener una lista no vacía de segmentos.');return data.segments.map(x=>{let start=Number(x.start),end=Number(x.end),text=String(x.text??'').trim();if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<start||!text||text.length>10000)throw Error('Hay marcas de tiempo o texto inválidos.');return {start,end,speaker:String(x.speaker||'Sin identificar').slice(0,80),text}})}
 async function importOffline(a,file){try{if(file.size>5*1024*1024)throw Error('El JSON supera 5 MB.');let data=JSON.parse(await file.text());if(data.audioFile!==filename(a))throw Error('El nombre de audio del JSON no coincide con este bloque. Descarga el audio desde este bloque y vuelve a procesarlo.');if(data.audioSize!==a.size)throw Error('El tamaño del audio no coincide con el bloque original.');let rows=normalizeTranscript(data);if(a.transcript&&!confirm('Este bloque ya tiene transcripción. ¿Reemplazarla con el JSON seleccionado?'))return;a.transcript=rows;await put(A,a);notice('Transcripción offline del bloque '+a.index+' importada. Verifica el texto con el audio.');await render()}catch(e){notice('No se pudo importar el JSON: '+e.message,'error')}}
 async function textTranscript(){let rows=session?await segments():[];return rows.filter(a=>a.transcript).flatMap(a=>a.transcript.map(s=>`${fmt(a.startMs+s.start*1000)} [${s.speaker}] ${s.text}`)).join('\n\n')}
@@ -419,7 +527,7 @@ $('finish').onclick=finish;
 $('test').onclick=testMic;
 $('saveNotes').onclick=()=>{if(!session)return alert('Inicia o abre una sesión.');save().then(()=>notice('Notas guardadas'))};
 $('mark').onclick=()=>{let note=prompt('Descripción del momento importante:');if(note===null)return;session.markers.push({atMs:duration(),note:note.trim()||'Momento importante'});save().then(render)};
-$('downloadAll').onclick=async()=>{let aud=(await segments()).filter(x=>x.blob&&x.blob.size>0);if(!aud.length)return notice('No hay bloques con audio válido para descargar.','warn');if(aud.length>5&&!confirm(`El navegador puede bloquear ${aud.length} descargas. ¿Continuar?`))return;for(let a of aud){download(a.blob,filename(a));await new Promise(ok=>setTimeout(ok,500))}};
+$('downloadAll').onclick=async()=>{let aud=(await segments()).filter(x=>x.blob&&x.blob.size>0);if(!aud.length)return notice('No hay bloques con audio válido para descargar.','warn');if(aud.length>5&&!confirm(`El navegador puede bloquear ${aud.length} descargas. ¿Continuar?`))return;for(let a of aud){const mimeType=safeAudioMime(a.mimeType||a.blobType||a.blob.type);download(new Blob([a.blob],{type:mimeType}),filename(a));await new Promise(ok=>setTimeout(ok,500))}};
 $('exportJson').onclick=async()=>{let aud=await segments();download(new Blob([JSON.stringify({...session,segments:aud.map(({blob,transcript,...rest})=>({...rest,transcript,fileName:filename(rest)}))},null,2)],{type:'application/json'}),clean(session.intervieweeCode)+'_ficha.json')};
 $('saveServer').onclick=()=>{let v=$('server').value.trim().replace(/\/$/,'');if(v&&(!/^https:\/\//i.test(v)||!v.endsWith('.php')))return alert('Escribe la URL HTTPS completa de transcribe.php.');localStorage.setItem('tesina_transcription_url',v);notice('URL guardada en este dispositivo.')};
 $('exportTxt').onclick=async()=>{if(session)download(new Blob([await textTranscript()],{type:'text/plain;charset=utf-8'}),clean(session.intervieweeCode)+'_transcripcion.txt')};
