@@ -23,7 +23,10 @@ const audioBytes=a=>a.blob?.size??a.size??0;
 const mb=n=>(Math.max(0,n)/1048576).toFixed(2)+' MB';
 const sizeText=n=>n>=1073741824?(n/1073741824).toFixed(2)+' GB':mb(n);
 const wavEstimate=a=>44+Math.ceil(Math.max(0,(Number(a.endMs)||0)-(Number(a.startMs)||0))/1000*16000)*2;
+
+// [PARCHE 3] Validación de blob al inicio de convertToWav
 async function convertToWav(blob){
+ if(!blob || !(blob instanceof Blob) || blob.size===0)throw Error('El bloque no tiene audio válido. No se puede preparar WAV.');
  const AudioClass=window.AudioContext||window.webkitAudioContext;
  if(!AudioClass)throw Error('Este navegador no permite convertir el audio a WAV');
  const audioContext=new AudioClass();
@@ -70,30 +73,179 @@ function resume(){if(recorder?.state!=='paused')return;runStart=Date.now();block
 function finish(){if(!active()||stopping||!confirm('¿Finalizar esta entrevista? Espera a que el último bloque quede guardado.'))return;stopping=true;rotating=false;clearInterval(blockTimer);if(recorder.state==='paused'){recorder.resume();runStart=Date.now()}notice('Guardando último bloque…','warn');recorder.stop();controls()}
 async function testMic(){if(active()){alert('Termina la grabación antes de probar el micrófono.');return}let st,r,parts=[];try{$('test').disabled=true;$('testResult').textContent=' Grabando 5 segundos…';st=await navigator.mediaDevices.getUserMedia({audio:true});let type=mime();r=new MediaRecorder(st,type?{mimeType:type}:{});r.ondataavailable=e=>{if(e.data.size)parts.push(e.data)};r.start();await new Promise(ok=>setTimeout(ok,5000));await new Promise(ok=>{r.onstop=ok;r.stop()});if(testURL)URL.revokeObjectURL(testURL);testURL=URL.createObjectURL(new Blob(parts,{type:r.mimeType}));$('testPlayer').src=testURL;$('testPlayer').classList.remove('hidden');$('testResult').textContent=' Escucha la prueba y confirma que la voz se oye claramente.'}catch(e){$('testResult').textContent=' Error: '+e.message}finally{st?.getTracks().forEach(t=>t.stop());$('test').disabled=false}}
 async function storage(){if(!navigator.storage?.estimate){$('storage').textContent='Este navegador no informa el espacio disponible para la página.';return}try{let estimate=await navigator.storage.estimate(),usage=Number(estimate.usage),quota=Number(estimate.quota);if(!Number.isFinite(usage)||!Number.isFinite(quota)||quota<=0)throw Error('Sin cuota disponible');$('storage').textContent=`Navegador para este dominio: ${sizeText(usage)} utilizados · cuota estimada ${sizeText(quota)} · disponible estimado ${sizeText(Math.max(0,quota-usage))}. Incluye otras páginas del mismo dominio.`;$('spaceMeter').value=Math.min(100,Math.round(usage/quota*100))}catch{$('storage').textContent='El navegador no pudo estimar el espacio disponible para esta página.'}}
-async function load(s){if(active())return alert('Finaliza la grabación actual antes de abrir otra sesión.');session=s;preparedWav=null;baseMs=s.durationMs||0;for(let [id,v] of Object.entries({project:s.projectName,interviewer:s.interviewer,code:s.intervieweeCode,notes:s.notes,questions:s.questions}))$(id).value=v||'';$('minutes').value=String(s.segmentMinutes||5);$('consent').checked=false;$('timer').textContent=fmt(s.durationMs);notice(s.status==='interrupted'?'Sesión interrumpida: audio guardado hasta el último bloque. Puedes continuar.':'Sesión cargada',s.status==='interrupted'?'warn':'');controls();render()}
-async function render(){if(!db)return;let [list,records]=await Promise.all([all(S),all(A)]);list.sort((a,b)=>b.startedAt-a.startedAt);let totals=new Map(),wavTotals=new Map(),totalAudio=0;for(let a of records){let n=audioBytes(a),id=a.sessionId;totals.set(id,(totals.get(id)||0)+n);wavTotals.set(id,(wavTotals.get(id)||0)+wavEstimate(a));totalAudio+=n}$('audioTotal').textContent=`Audios de todas las entrevistas: ${sizeText(totalAudio)} guardados en este navegador · ${records.length} bloques. Los WAV descargados se guardan aparte.`;$('sessions').replaceChildren();for(let s of list){let row=document.createElement('div');row.className='row';let info=document.createElement('span');info.textContent=`${s.intervieweeCode||'Sin código'} · ${s.projectName||'Sin proyecto'} · ${date(s.startedAt)} · ${s.status} · ${s.segmentCount||0} bloques · originales ${sizeText(totals.get(s.id)||0)} · WAV de todos ≈${sizeText(wavTotals.get(s.id)||0)}`;let b=document.createElement('button');b.className='secondary';b.textContent='Abrir';b.onclick=()=>load(s);row.append(info,b);$('sessions').append(row)}let aud=session?records.filter(a=>a.sessionId===session.id).sort((a,b)=>a.index-b.index):[];$('segments').replaceChildren();let lastPrepare=null;for(let a of aud){let row=document.createElement('div');row.className='row';let label=document.createElement('span');label.textContent=`Bloque ${a.index} · ${fmt(a.startMs)}–${fmt(a.endMs)} · original ${mb(audioBytes(a))} · WAV ${preparedWav?.sessionId===session?.id&&preparedWav?.segmentId===a.id?mb(preparedWav.blob.size)+' preparado':'≈'+mb(wavEstimate(a))}`;let play=document.createElement('button');play.textContent='Escuchar';play.className='secondary';let dl=document.createElement('button');dl.textContent='Descargar';dl.className='secondary';dl.onclick=()=>download(a.blob,filename(a));play.onclick=()=>{let old=row.querySelector('audio');if(old){URL.revokeObjectURL(old.src);old.remove();return}let p=document.createElement('audio');p.controls=true;p.src=URL.createObjectURL(a.blob);p.onended=()=>{};row.append(p)};let tr=document.createElement('button');tr.textContent=a.transcript?'Retranscribir en línea':'Transcribir en línea';tr.className='secondary';tr.onclick=()=>transcribe(a);let imp=document.createElement('button');imp.textContent='Importar JSON offline';imp.className='secondary';let pick=document.createElement('input');pick.type='file';pick.accept='.json,application/json';pick.className='hidden';pick.onchange=async()=>{if(pick.files?.[0])await importOffline(a,pick.files[0]);pick.value=''};imp.onclick=()=>pick.click();
-let prepare=document.createElement('button');prepare.className='secondary';prepare.textContent='Preparar WAV';
-let wavDownload=document.createElement('button');wavDownload.className='secondary';wavDownload.textContent='Descargar WAV';
-let wavShare=document.createElement('button');wavShare.className='secondary';wavShare.textContent='Compartir WAV';
-const ready=()=>preparedWav?.sessionId===session?.id&&preparedWav?.segmentId===a.id;
-wavDownload.disabled=wavShare.disabled=!ready();
-prepare.onclick=async()=>{
- if(ready()){notice('El WAV de este bloque ya está preparado. Descárgalo o toca Compartir WAV.');return}
- prepare.disabled=true;prepare.textContent='Preparando WAV…';
- const owner=session?.id;
- try{
-  const blob=await convertToWav(a.blob);
-  if(session?.id!==owner)return notice('Cambiaste de sesión durante la conversión. Abre el bloque de nuevo.','warn');
-  preparedWav={sessionId:owner,segmentId:a.id,blob,name:wavName(a)};
-  wavDownload.disabled=wavShare.disabled=false;
-  await render();
-  notice('WAV listo · '+(blob.size/1048576).toFixed(1)+' MB. Pulsa Compartir WAV y elige WhatsApp, o descárgalo.');
- }catch(e){notice('No se pudo preparar el WAV: '+e.message,'error')}
- finally{prepare.disabled=false;prepare.textContent='Preparar WAV'}
-};
-wavDownload.onclick=()=>{if(ready())download(preparedWav.blob,preparedWav.name);else notice('Prepara de nuevo el WAV de este bloque.','warn')};
-wavShare.onclick=()=>{if(ready())shareWav();else notice('Prepara de nuevo el WAV de este bloque.','warn')};
-row.append(label,play,dl,prepare,wavDownload,wavShare,tr,imp,pick);$('segments').append(row);lastPrepare=prepare}$('prepareLatest').disabled=!lastPrepare;$('prepareLatest').onclick=()=>lastPrepare?.click();$('shareLatest').disabled=!(preparedWav?.sessionId===session?.id);$('shareLatest').onclick=shareWav;$('wavHelp').textContent=!session?'Abre una entrevista guardada abajo para ver sus bloques de audio.':!aud.length?'Esta entrevista aún no tiene bloques guardados. Finaliza la grabación o espera al siguiente bloque.':`${aud.length} bloques disponibles. Puedes preparar el último aquí o elegir cualquier bloque en la lista.`;$('count').textContent=`${aud.length} bloques protegidos · original ${sizeText(totals.get(session?.id)||0)} · WAV de todos ≈${sizeText(wavTotals.get(session?.id)||0)}`;$('downloadAll').disabled=!aud.length;$('exportJson').disabled=!session;$('markers').replaceChildren();for(let m of session?.markers||[]){let d=document.createElement('div');d.className='row';d.textContent=`⭐ ${fmt(m.atMs)} · ${m.note}`;$('markers').append(d)}$('transcriptRows').replaceChildren();for(let a of aud.filter(x=>x.transcript)){let block=document.createElement('div');block.className='row';let div=document.createElement('div');let title=document.createElement('b');title.textContent=`Bloque ${a.index} · ${fmt(a.startMs)}`;div.append(title);for(let seg of a.transcript){let p=document.createElement('p'),stamp=document.createElement('span'),role=document.createElement('select');stamp.textContent=fmt(a.startMs+seg.start*1000)+' ';role.style.width='auto';for(let value of [seg.speaker,'Entrevistador','Entrevistado','Sin identificar'].filter((v,i,arr)=>arr.indexOf(v)===i)){let option=document.createElement('option');option.value=value;option.textContent=value;role.append(option)}role.value=seg.speaker;role.onchange=async()=>{seg.speaker=role.value;await put(A,a)};let words=document.createElement('span');words.textContent=' '+seg.text;p.append(stamp,role,words);div.append(p)}block.append(div);$('transcriptRows').append(block)}$('analysisRows').replaceChildren();for(let c of session?.codes||[]){let d=document.createElement('div');d.className='row';d.textContent=`${c.question} · ${c.category} / ${c.code}: “${c.quote}”`; $('analysisRows').append(d)}storage()}
+
+// [PARCHE 4] No perder preparedWav si es la misma sesión
+async function load(s){if(active())return alert('Finaliza la grabación actual antes de abrir otra sesión.');if(session?.id!==s.id)preparedWav=null;session=s;baseMs=s.durationMs||0;for(let [id,v] of Object.entries({project:s.projectName,interviewer:s.interviewer,code:s.intervieweeCode,notes:s.notes,questions:s.questions}))$(id).value=v||'';$('minutes').value=String(s.segmentMinutes||5);$('consent').checked=false;$('timer').textContent=fmt(s.durationMs);notice(s.status==='interrupted'?'Sesión interrumpida: audio guardado hasta el último bloque. Puedes continuar.':'Sesión cargada',s.status==='interrupted'?'warn':'');controls();render()}
+
+async function render(){
+ if(!db)return;
+ let [list,records]=await Promise.all([all(S),all(A)]);
+ list.sort((a,b)=>b.startedAt-a.startedAt);
+ let totals=new Map(),wavTotals=new Map(),totalAudio=0;
+ for(let a of records){let n=audioBytes(a),id=a.sessionId;totals.set(id,(totals.get(id)||0)+n);wavTotals.set(id,(wavTotals.get(id)||0)+wavEstimate(a));totalAudio+=n}
+ $('audioTotal').textContent=`Audios de todas las entrevistas: ${sizeText(totalAudio)} guardados en este navegador · ${records.length} bloques. Los WAV descargados se guardan aparte.`;
+ $('sessions').replaceChildren();
+ for(let s of list){let row=document.createElement('div');row.className='row';let info=document.createElement('span');info.textContent=`${s.intervieweeCode||'Sin código'} · ${s.projectName||'Sin proyecto'} · ${date(s.startedAt)} · ${s.status} · ${s.segmentCount||0} bloques · originales ${sizeText(totals.get(s.id)||0)} · WAV de todos ≈${sizeText(wavTotals.get(s.id)||0)}`;let b=document.createElement('button');b.className='secondary';b.textContent='Abrir';b.onclick=()=>load(s);row.append(info,b);$('sessions').append(row)}
+ let aud=session?records.filter(a=>a.sessionId===session.id).sort((a,b)=>a.index-b.index):[];
+ $('segments').replaceChildren();
+ let lastPrepare=null;
+
+ // [PARCHE 1] Bloque de render por segmento: validación de audio, indicador visual, botones robustos
+ for(let a of aud){
+  let row=document.createElement('div');
+  row.className='row';
+  let label=document.createElement('span');
+
+  const hasAudio = !!(a.blob && a.blob.size>0);
+  const ready = () => preparedWav?.sessionId===session?.id && preparedWav?.segmentId===a.id;
+  const wavState = hasAudio
+    ? (ready() ? mb(preparedWav.blob.size)+' preparado' : '≈'+mb(wavEstimate(a)))
+    : '⚠️ sin audio guardado';
+  label.textContent = `Bloque ${a.index} · ${fmt(a.startMs)}–${fmt(a.endMs)} · original ${mb(audioBytes(a))} · WAV ${wavState}`;
+
+  let play=document.createElement('button');
+  play.textContent='Escuchar';
+  play.className='secondary';
+  play.disabled=!hasAudio;
+  play.onclick=()=>{
+   let old=row.querySelector('audio');
+   if(old){URL.revokeObjectURL(old.src);old.remove();return}
+   if(!hasAudio)return notice('Este bloque no tiene audio guardado.','error');
+   let p=document.createElement('audio');
+   p.controls=true;
+   p.src=URL.createObjectURL(a.blob);
+   p.onended=()=>{};
+   row.append(p);
+  };
+
+  let dl=document.createElement('button');
+  dl.textContent='Descargar';
+  dl.className='secondary';
+  dl.disabled=!hasAudio;
+  dl.onclick=()=>{ if(hasAudio)download(a.blob,filename(a)); else notice('Este bloque no tiene audio guardado.','error'); };
+
+  let tr=document.createElement('button');
+  tr.textContent=a.transcript?'Retranscribir en línea':'Transcribir en línea';
+  tr.className='secondary';
+  tr.disabled=!hasAudio;
+  tr.onclick=()=>transcribe(a);
+
+  let imp=document.createElement('button');
+  imp.textContent='Importar JSON offline';
+  imp.className='secondary';
+  let pick=document.createElement('input');
+  pick.type='file';
+  pick.accept='.json,application/json';
+  pick.className='hidden';
+  pick.onchange=async()=>{if(pick.files?.[0])await importOffline(a,pick.files[0]);pick.value=''};
+  imp.onclick=()=>pick.click();
+
+  let prepare=document.createElement('button');
+  prepare.className='secondary';
+  prepare.textContent='Preparar WAV';
+  prepare.disabled=!hasAudio;
+
+  let wavDownload=document.createElement('button');
+  wavDownload.className='secondary';
+  wavDownload.textContent='Descargar WAV';
+  wavDownload.disabled=!ready();
+
+  let wavShare=document.createElement('button');
+  wavShare.className='secondary';
+  wavShare.textContent='Compartir WAV';
+  wavShare.disabled=!ready();
+
+  prepare.onclick=async()=>{
+   if(!hasAudio){notice('Este bloque no tiene audio guardado. No se puede preparar WAV.','error');return}
+   if(ready()){notice('El WAV de este bloque ya está preparado. Descárgalo o toca Compartir WAV.');return}
+   prepare.disabled=true;
+   prepare.textContent='Preparando WAV…';
+   const owner=session?.id;
+   try{
+    const blob=await convertToWav(a.blob);
+    if(session?.id!==owner){notice('Cambiaste de sesión durante la conversión. Abre el bloque de nuevo.','warn');return}
+    preparedWav={sessionId:owner,segmentId:a.id,blob,name:wavName(a)};
+    wavDownload.disabled=wavShare.disabled=false;
+    await render();
+    notice('WAV listo · '+(blob.size/1048576).toFixed(1)+' MB. Pulsa Compartir WAV y elige WhatsApp, o descárgalo.');
+   }catch(e){notice('No se pudo preparar el WAV: '+e.message,'error')}
+   finally{prepare.disabled=!hasAudio;prepare.textContent='Preparar WAV'}
+  };
+
+  wavDownload.onclick=()=>{if(ready())download(preparedWav.blob,preparedWav.name);else notice('Prepara de nuevo el WAV de este bloque.','warn')};
+  wavShare.onclick=()=>{if(ready())shareWav();else notice('Prepara de nuevo el WAV de este bloque.','warn')};
+
+  row.append(label,play,dl,prepare,wavDownload,wavShare,tr,imp,pick);
+  $('segments').append(row);
+  lastPrepare=prepare;
+ }
+
+ // [PARCHE 2] Botones globales: seleccionar último bloque con audio válido
+ const lastValidBlock = [...aud].reverse().find(x => x.blob && x.blob.size>0);
+ $('prepareLatest').disabled = !lastValidBlock;
+ $('prepareLatest').onclick = () => {
+  if (!lastValidBlock) return notice('No hay bloques con audio válido para preparar WAV.','error');
+  const rows = $('segments').querySelectorAll('.row');
+  for (let i = rows.length - 1; i >= 0; i--) {
+   const row = rows[i];
+   if (row.textContent.includes(`Bloque ${lastValidBlock.index} `)) {
+    const btn = [...row.querySelectorAll('button')].find(b => b.textContent === 'Preparar WAV');
+    if (btn) { btn.click(); return; }
+   }
+  }
+  notice('No se encontró el botón para preparar el WAV del último bloque.','error');
+ };
+ $('shareLatest').disabled = !(preparedWav?.sessionId===session?.id);
+ $('shareLatest').onclick = shareWav;
+
+ $('wavHelp').textContent = !session
+  ? 'Abre una entrevista guardada abajo para ver sus bloques de audio.'
+  : !aud.length
+   ? 'Esta entrevista aún no tiene bloques guardados. Finaliza la grabación o espera al siguiente bloque.'
+   : !lastValidBlock
+    ? '⚠️ Ningún bloque tiene audio guardado. Revisa la grabación o el almacenamiento.'
+    : `${aud.length} bloques disponibles. Puedes preparar el último aquí o elegir cualquier bloque en la lista.`;
+
+ $('count').textContent=`${aud.length} bloques protegidos · original ${sizeText(totals.get(session?.id)||0)} · WAV de todos ≈${sizeText(wavTotals.get(session?.id)||0)}`;
+ $('downloadAll').disabled=!aud.filter(x=>x.blob&&x.blob.size>0).length;
+ $('exportJson').disabled=!session;
+ $('markers').replaceChildren();
+ for(let m of session?.markers||[]){let d=document.createElement('div');d.className='row';d.textContent=`⭐ ${fmt(m.atMs)} · ${m.note}`;$('markers').append(d)}
+ $('transcriptRows').replaceChildren();
+ for(let a of aud.filter(x=>x.transcript)){
+  let block=document.createElement('div');
+  block.className='row';
+  let div=document.createElement('div');
+  let title=document.createElement('b');
+  title.textContent=`Bloque ${a.index} · ${fmt(a.startMs)}`;
+  div.append(title);
+  for(let seg of a.transcript){
+   let p=document.createElement('p'),stamp=document.createElement('span'),role=document.createElement('select');
+   stamp.textContent=fmt(a.startMs+seg.start*1000)+' ';
+   role.style.width='auto';
+   for(let value of [seg.speaker,'Entrevistador','Entrevistado','Sin identificar'].filter((v,i,arr)=>arr.indexOf(v)===i)){
+    let option=document.createElement('option');option.value=value;option.textContent=value;role.append(option);
+   }
+   role.value=seg.speaker;
+   role.onchange=async()=>{seg.speaker=role.value;await put(A,a)};
+   let words=document.createElement('span');
+   words.textContent=' '+seg.text;
+   p.append(stamp,role,words);
+   div.append(p);
+  }
+  block.append(div);
+  $('transcriptRows').append(block);
+ }
+ $('analysisRows').replaceChildren();
+ for(let c of session?.codes||[]){
+  let d=document.createElement('div');
+  d.className='row';
+  d.textContent=`${c.question} · ${c.category} / ${c.code}: “${c.quote}”`;
+  $('analysisRows').append(d);
+ }
+ storage();
+}
+
 async function transcribe(a){let endpoint=$('server').value.trim().replace(/\/$/,'');if(!endpoint||!/^https:\/\//i.test(endpoint)){alert('Configura la URL HTTPS de transcribe.php.');return}if(!$('token').value)return alert('Escribe la clave de acceso del servidor.');if(!confirm('¿Enviar este bloque de audio al servidor configurado para transcribirlo?'))return;notice('Transcribiendo bloque '+a.index+'…');try{let fd=new FormData();fd.append('audio',a.blob,filename(a));let u=new URL(endpoint);if(u.protocol!=='https:'||u.username||u.password||u.search||u.hash||!u.pathname.endsWith('.php'))throw Error('Escribe la URL completa de transcribe.php por HTTPS');let r=await fetch(u.href,{method:'POST',headers:{Authorization:'Bearer '+$('token').value},body:fd});if(!r.ok)throw Error((await r.text()).slice(0,250));let data=await r.json();if(!Array.isArray(data.segments))throw Error('Respuesta inesperada');a.transcript=data.segments.map(x=>({start:Number(x.start)||0,end:Number(x.end)||0,speaker:String(x.speaker||'Sin identificar'),text:String(x.text||'')}));await put(A,a);notice('Transcripción guardada en este dispositivo. Revisa los hablantes con el audio.');render()}catch(e){notice('No se pudo transcribir: '+e.message,'error')}}
 function normalizeTranscript(data){if(!Array.isArray(data?.segments)||!data.segments.length||data.segments.length>5000)throw Error('El JSON debe contener una lista no vacía de segmentos.');return data.segments.map(x=>{let start=Number(x.start),end=Number(x.end),text=String(x.text??'').trim();if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<start||!text||text.length>10000)throw Error('Hay marcas de tiempo o texto inválidos.');return {start,end,speaker:String(x.speaker||'Sin identificar').slice(0,80),text}})}
 async function importOffline(a,file){try{if(file.size>5*1024*1024)throw Error('El JSON supera 5 MB.');let data=JSON.parse(await file.text());if(data.audioFile!==filename(a))throw Error('El nombre de audio del JSON no coincide con este bloque. Descarga el audio desde este bloque y vuelve a procesarlo.');if(data.audioSize!==a.size)throw Error('El tamaño del audio no coincide con el bloque original.');let rows=normalizeTranscript(data);if(a.transcript&&!confirm('Este bloque ya tiene transcripción. ¿Reemplazarla con el JSON seleccionado?'))return;a.transcript=rows;await put(A,a);notice('Transcripción offline del bloque '+a.index+' importada. Verifica el texto con el audio.');await render()}catch(e){notice('No se pudo importar el JSON: '+e.message,'error')}}
@@ -101,7 +253,27 @@ async function textTranscript(){let rows=session?await segments():[];return rows
 function htmlEscape(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 async function exportDoc(){if(!session)return;let t=await textTranscript(),html=`<html><head><meta charset="utf-8"></head><body><h1>Transcripción de entrevista</h1><p>Proyecto: ${htmlEscape(session.projectName)}<br>Código: ${htmlEscape(session.intervieweeCode)}<br>Fecha: ${htmlEscape(date(session.startedAt))}</p>${t.split('\n\n').map(s=>`<p>${htmlEscape(s)}</p>`).join('')}</body></html>`;download(new Blob(['\ufeff',html],{type:'application/msword'}),clean(session.intervieweeCode)+'_transcripcion.doc')}
 function csv(v){return '"'+String(v??'').replace(/"/g,'""')+'"'}
+
 async function init(){try{db=await open();let existing=await all(S);for(let s of existing.filter(x=>['recording','paused'].includes(x.status))){s.status='interrupted';s.interruptedAt=Date.now();await put(S,s)}try{await navigator.storage?.persist?.()}catch{}$('server').value=localStorage.getItem('tesina_transcription_url')||'';if('serviceWorker'in navigator&&isSecureContext)navigator.serviceWorker.register('./sw.js').catch(()=>{});storage();render();controls();if(!isSecureContext)notice('Abre mediante HTTPS para acceder al micrófono.','warn')}catch(e){notice('No se puede abrir IndexedDB: '+e.message,'error')}}
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&active())wakeOn()});window.addEventListener('beforeunload',e=>{if(active()){e.preventDefault();e.returnValue=''}});
-$('start').onclick=start;$('pause').onclick=pause;$('resume').onclick=resume;$('finish').onclick=finish;$('test').onclick=testMic;$('saveNotes').onclick=()=>{if(!session)return alert('Inicia o abre una sesión.');save().then(()=>notice('Notas guardadas'))};$('mark').onclick=()=>{let note=prompt('Descripción del momento importante:');if(note===null)return;session.markers.push({atMs:duration(),note:note.trim()||'Momento importante'});save().then(render)};$('downloadAll').onclick=async()=>{let aud=await segments();if(aud.length>5&&!confirm(`El navegador puede bloquear ${aud.length} descargas. ¿Continuar?`))return;for(let a of aud){download(a.blob,filename(a));await new Promise(ok=>setTimeout(ok,500))}};$('exportJson').onclick=async()=>{let aud=await segments();download(new Blob([JSON.stringify({...session,segments:aud.map(({blob,transcript,...rest})=>({...rest,transcript,fileName:filename(rest)}))},null,2)],{type:'application/json'}),clean(session.intervieweeCode)+'_ficha.json')};$('saveServer').onclick=()=>{let v=$('server').value.trim().replace(/\/$/,'');if(v&&(!/^https:\/\//i.test(v)||!v.endsWith('.php')))return alert('Escribe la URL HTTPS completa de transcribe.php.');localStorage.setItem('tesina_transcription_url',v);notice('URL guardada en este dispositivo.')};$('exportTxt').onclick=async()=>{if(session)download(new Blob([await textTranscript()],{type:'text/plain;charset=utf-8'}),clean(session.intervieweeCode)+'_transcripcion.txt')};$('exportDoc').onclick=exportDoc;$('addCode').onclick=()=>{if(!session)return alert('Abre una entrevista.');let quote=$('quote').value.trim();if(!quote)return alert('Selecciona un fragmento literal.');session.codes.push({interviewee:session.intervieweeCode,question:$('questionCode').value.trim(),quote,code:$('codeName').value.trim(),category:$('category').value.trim(),memo:$('memo').value.trim()});save().then(render);$('quote').value=''};$('exportCsv').onclick=()=>{if(!session)return;let head=['Entrevistado','Pregunta','Fragmento','Código','Categoría','Nota'];let lines=[head,...session.codes.map(x=>[x.interviewee,x.question,x.quote,x.code,x.category,x.memo])].map(row=>row.map(csv).join(','));download(new Blob(['\ufeff',lines.join('\r\n')],{type:'text/csv;charset=utf-8'}),clean(session.intervieweeCode)+'_matriz.csv')};document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-tab]').forEach(x=>x.setAttribute('aria-selected',String(x===b)));document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('hidden',x.id!==b.dataset.tab))});init();
+
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&active())wakeOn()});
+window.addEventListener('beforeunload',e=>{if(active()){e.preventDefault();e.returnValue=''}});
+
+$('start').onclick=start;
+$('pause').onclick=pause;
+$('resume').onclick=resume;
+$('finish').onclick=finish;
+$('test').onclick=testMic;
+$('saveNotes').onclick=()=>{if(!session)return alert('Inicia o abre una sesión.');save().then(()=>notice('Notas guardadas'))};
+$('mark').onclick=()=>{let note=prompt('Descripción del momento importante:');if(note===null)return;session.markers.push({atMs:duration(),note:note.trim()||'Momento importante'});save().then(render)};
+$('downloadAll').onclick=async()=>{let aud=(await segments()).filter(x=>x.blob&&x.blob.size>0);if(!aud.length)return notice('No hay bloques con audio válido para descargar.','warn');if(aud.length>5&&!confirm(`El navegador puede bloquear ${aud.length} descargas. ¿Continuar?`))return;for(let a of aud){download(a.blob,filename(a));await new Promise(ok=>setTimeout(ok,500))}};
+$('exportJson').onclick=async()=>{let aud=await segments();download(new Blob([JSON.stringify({...session,segments:aud.map(({blob,transcript,...rest})=>({...rest,transcript,fileName:filename(rest)}))},null,2)],{type:'application/json'}),clean(session.intervieweeCode)+'_ficha.json')};
+$('saveServer').onclick=()=>{let v=$('server').value.trim().replace(/\/$/,'');if(v&&(!/^https:\/\//i.test(v)||!v.endsWith('.php')))return alert('Escribe la URL HTTPS completa de transcribe.php.');localStorage.setItem('tesina_transcription_url',v);notice('URL guardada en este dispositivo.')};
+$('exportTxt').onclick=async()=>{if(session)download(new Blob([await textTranscript()],{type:'text/plain;charset=utf-8'}),clean(session.intervieweeCode)+'_transcripcion.txt')};
+$('exportDoc').onclick=exportDoc;
+$('addCode').onclick=()=>{if(!session)return alert('Abre una entrevista.');let quote=$('quote').value.trim();if(!quote)return alert('Selecciona un fragmento literal.');session.codes.push({interviewee:session.intervieweeCode,question:$('questionCode').value.trim(),quote,code:$('codeName').value.trim(),category:$('category').value.trim(),memo:$('memo').value.trim()});save().then(render);$('quote').value=''};
+$('exportCsv').onclick=()=>{if(!session)return;let head=['Entrevistado','Pregunta','Fragmento','Código','Categoría','Nota'];let lines=[head,...session.codes.map(x=>[x.interviewee,x.question,x.quote,x.code,x.category,x.memo])].map(row=>row.map(csv).join(','));download(new Blob(['\ufeff',lines.join('\r\n')],{type:'text/csv;charset=utf-8'}),clean(session.intervieweeCode)+'_matriz.csv')};
+document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-tab]').forEach(x=>x.setAttribute('aria-selected',String(x===b)));document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('hidden',x.id!==b.dataset.tab))});
+
+init();
 })();
