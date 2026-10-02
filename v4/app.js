@@ -63,12 +63,143 @@ function shareWav(){
   navigator.share({files:[file]}).catch(e=>{if(e.name!=='AbortError')notice('No se pudo compartir el WAV: '+e.message,'error')});
  }catch(e){notice('No se pudo compartir el WAV: '+e.message,'error')}
 }
+
+/* =========================================================
+   [MODO SECUENCIAL] Envío bloque a bloque por WhatsApp
+   ========================================================= */
+
+async function seqPendingBlocks(){
+ if(!session)return [];
+ const shared=new Set(session.sharedSegments||[]);
+ const aud=await segments();
+ return aud.filter(a=>a.blob&&a.blob.size>0&&!shared.has(a.id));
+}
+
+async function seqMarkShared(segmentId){
+ if(!session)return;
+ const set=new Set(session.sharedSegments||[]);
+ set.add(segmentId);
+ session.sharedSegments=[...set];
+ session.updatedAt=Date.now();
+ await put(S,{...session});
+}
+
+async function seqReset(){
+ if(!session)return;
+ if(!confirm('¿Reiniciar las marcas de envío? Todos los bloques volverán a aparecer como pendientes.'))return;
+ session.sharedSegments=[];
+ session.updatedAt=Date.now();
+ await put(S,{...session});
+ notice('Marcas de envío reiniciadas.');
+ render();
+}
+
+async function seqStart(){
+ if(seqActive){seqStop();return}
+ if(!session)return notice('Abre una entrevista primero.','warn');
+ if(active())return notice('Finaliza la grabación antes de enviar.','warn');
+ if(!navigator.share||!navigator.canShare){
+  return notice('Este navegador no permite compartir archivos. Descarga los WAV y adjúntalos desde WhatsApp Web o desde Archivos.','warn');
+ }
+ seqActive=true;
+ seqAbort=false;
+ $('sendSeq').textContent='⏹ Detener envío';
+ $('sendSeq').classList.remove('secondary');
+ $('sendSeq').classList.add('danger');
+ await seqLoop();
+}
+
+function seqStop(){
+ seqAbort=true;
+ seqActive=false;
+ seqWaiting=false;
+ if($('sendSeq')){
+  $('sendSeq').textContent='📤 Enviar todos por WhatsApp';
+  $('sendSeq').classList.add('secondary');
+  $('sendSeq').classList.remove('danger');
+ }
+ notice('Envío secuencial detenido.','warn');
+}
+
+async function seqLoop(){
+ while(seqActive && !seqAbort){
+  const pending=await seqPendingBlocks();
+  if(!pending.length){
+   seqActive=false;
+   $('sendSeq').textContent='📤 Enviar todos por WhatsApp';
+   $('sendSeq').classList.add('secondary');
+   $('sendSeq').classList.remove('danger');
+   notice('✅ Todos los bloques fueron enviados.','');
+   render();
+   return;
+  }
+  const total=(session.segmentCount||pending.length);
+  const done=total-pending.length+1;
+  const a=pending[0];
+  notice(`📤 Preparando bloque ${a.index} (${done} de ${total})…`,'warn');
+
+  let blob;
+  try{
+   blob=await convertToWav(a.blob);
+  }catch(e){
+   notice(`No se pudo preparar el WAV del bloque ${a.index}: ${e.message}`,'error');
+   await seqMarkShared(a.id);
+   continue;
+  }
+  preparedWav={sessionId:session.id,segmentId:a.id,blob,name:wavName(a)};
+
+  try{
+   const file=new File([blob],preparedWav.name,{type:'audio/wav'});
+   if(!navigator.canShare({files:[file]})){
+    notice(`El teléfono no admite compartir el bloque ${a.index} como WAV. Descárgalo manualmente.`,'warn');
+    await seqMarkShared(a.id);
+    continue;
+   }
+   await navigator.share({files:[file]});
+   await seqMarkShared(a.id);
+   notice(`✅ Bloque ${a.index} enviado. Preparando siguiente…`,'');
+  }catch(e){
+   if(e.name==='AbortError'){
+    notice('Envío cancelado por el usuario. Deteniendo modo secuencial.','warn');
+    seqStop();
+    return;
+   }
+   notice(`No se pudo compartir el bloque ${a.index}: ${e.message}`,'error');
+   await seqMarkShared(a.id);
+  }
+
+  seqWaiting=true;
+  await new Promise(res=>{
+   const onVisible=()=>{
+    if(document.visibilityState==='visible'){
+     document.removeEventListener('visibilitychange',onVisible);
+     seqWaiting=false;
+     setTimeout(res,900);
+    }
+   };
+   document.addEventListener('visibilitychange',onVisible);
+   setTimeout(()=>{
+    document.removeEventListener('visibilitychange',onVisible);
+    seqWaiting=false;
+    res();
+   },120000);
+  });
+  await render();
+ }
+ if(seqAbort){
+  notice('Envío secuencial detenido.','warn');
+  $('sendSeq').textContent='📤 Enviar todos por WhatsApp';
+  $('sendSeq').classList.add('secondary');
+  $('sendSeq').classList.remove('danger');
+ }
+}
+
 async function wakeOn(){try{if(document.visibilityState==='visible'&&navigator.wakeLock)wake=await navigator.wakeLock.request('screen')}catch{}}
 async function cleanup(){clearInterval(blockTimer);clearInterval(ticker);clearInterval(checkpoint);blockTimer=ticker=checkpoint=0;if(meterFrame)cancelAnimationFrame(meterFrame);$('meter').value=0;try{await ctx?.close()}catch{}ctx=null;analyser=null;try{await wake?.release()}catch{}wake=null;stream?.getTracks().forEach(t=>t.stop());stream=null}
 function meterStart(){try{ctx=new (window.AudioContext||window.webkitAudioContext)();analyser=ctx.createAnalyser();analyser.fftSize=256;ctx.createMediaStreamSource(stream).connect(analyser);let data=new Uint8Array(analyser.frequencyBinCount);let draw=()=>{if(!analyser)return;analyser.getByteFrequencyData(data);$('meter').value=Math.min(100,Math.round(data.reduce((a,b)=>a+b,0)/data.length*2));meterFrame=requestAnimationFrame(draw)};draw()}catch{}}
 function beginClock(){runStart=Date.now();clearInterval(ticker);ticker=setInterval(()=>{$('timer').textContent=fmt(duration())},250);clearInterval(checkpoint);checkpoint=setInterval(()=>{save();storage()},10000)}
 function startBlock(){if(stopping||!stream?.active)return;let type=mime(),r=new MediaRecorder(stream,type?{mimeType:type,audioBitsPerSecond:64000}:{audioBitsPerSecond:64000});recorder=r;let parts=[],start=duration(),owner=session,index=(owner.segmentCount||0)+1;r.ondataavailable=e=>{if(e.data?.size)parts.push(e.data)};r.onerror=()=>{notice('Error del grabador. Revisa los bloques ya guardados.','error');stopping=true};r.onstop=()=>{let end=duration(),blob=new Blob(parts,{type:r.mimeType||type||'audio/webm'});owner.segmentCount=index;let task=queue(async()=>{if(blob.size){let row={id:`${owner.id}-SEG-${String(index).padStart(4,'0')}`,sessionId:owner.id,index,startMs:start,endMs:end,createdAt:Date.now(),size:blob.size,mimeType:blob.type,blob};await put(A,row);owner.bytes=(owner.bytes||0)+blob.size;await put(S,{...owner,notes:$('notes').value,questions:$('questions').value,durationMs:end,updatedAt:Date.now()})}else notice('Un bloque quedó vacío. Comprueba el micrófono.','warn')});if(rotating&&!stopping){rotating=false;startBlock();notice('Grabando · bloque '+(index+1))}else{recorder=null;task.then(async()=>{if(stopping){owner.status='finished';owner.endedAt=Date.now();owner.durationMs=end;try{await put(S,{...owner,notes:$('notes').value,questions:$('questions').value});notice('Entrevista finalizada. Verifica y descarga los audios.')}catch(e){owner.status='interrupted';notice('No se pudo cerrar la ficha: '+e.message,'error')}await cleanup();stopping=false;controls();render()}},async e=>{owner.status='interrupted';try{await put(S,{...owner})}catch{}await cleanup();stopping=false;notice('No se guardó el último bloque: '+e.message+'. Descarga los bloques anteriores.','error');controls();render()})}task.then(render).catch(()=>{})};r.start();blockStart=Date.now();clearInterval(blockTimer);blockTimer=setInterval(()=>{if(r.state==='recording'&&Date.now()-blockStart>=owner.segmentMinutes*60000){rotating=true;clearInterval(blockTimer);r.stop()}},1000);controls()}
-async function start(){if(!db||stopping||active())return;if(session?.status==='interrupted')return continueInterrupted();if(!($('project').value.trim()&&$('interviewer').value.trim()&&$('code').value.trim()&&$('consent').checked)){alert('Completa la ficha y confirma la autorización para grabar.');return}if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder){alert('Necesitas HTTPS y un navegador compatible con MediaRecorder.');return}try{stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true}});let now=Date.now();preparedWav=null;session={id:`ENT-${now}-${Math.random().toString(36).slice(2,8)}`,projectName:$('project').value.trim(),interviewer:$('interviewer').value.trim(),intervieweeCode:$('code').value.trim(),consent:true,startedAt:now,status:'recording',segmentMinutes:Number($('minutes').value),segmentCount:0,bytes:0,durationMs:0,markers:[],codes:[],notes:$('notes').value,questions:$('questions').value};baseMs=0;await put(S,{...session});beginClock();startBlock();meterStart();wakeOn();notice('Grabando · primer bloque');render()}catch(e){await cleanup();notice('No se inició la grabación: '+e.message,'error')}}
+async function start(){if(!db||stopping||active())return;if(session?.status==='interrupted')return continueInterrupted();if(!($('project').value.trim()&&$('interviewer').value.trim()&&$('code').value.trim()&&$('consent').checked)){alert('Completa la ficha y confirma la autorización para grabar.');return}if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder){alert('Necesitas HTTPS y un navegador compatible con MediaRecorder.');return}try{stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true}});let now=Date.now();preparedWav=null;session={id:`ENT-${now}-${Math.random().toString(36).slice(2,8)}`,projectName:$('project').value.trim(),interviewer:$('interviewer').value.trim(),intervieweeCode:$('code').value.trim(),consent:true,startedAt:now,status:'recording',segmentMinutes:Number($('minutes').value),segmentCount:0,bytes:0,durationMs:0,markers:[],codes:[],sharedSegments:[],notes:$('notes').value,questions:$('questions').value};baseMs=0;await put(S,{...session});beginClock();startBlock();meterStart();wakeOn();notice('Grabando · primer bloque');render()}catch(e){await cleanup();notice('No se inició la grabación: '+e.message,'error')}}
 async function continueInterrupted(){if(!session||session.status!=='interrupted'||!$('consent').checked){alert('Confirma de nuevo la autorización para continuar.');return}try{stream=await navigator.mediaDevices.getUserMedia({audio:true});session.status='recording';session.interruptions=[...(session.interruptions||[]),{at:Date.now(),resumeAtMs:session.durationMs}];baseMs=session.durationMs||0;await put(S,{...session});beginClock();startBlock();meterStart();wakeOn();notice('Grabación continuada. Hay una interrupción entre bloques.','warn');render()}catch(e){await cleanup();notice('No se pudo continuar: '+e.message,'error')}}
 function pause(){if(recorder?.state!=='recording')return;clearInterval(blockTimer);baseMs=duration();recorder.pause();session.status='paused';save();notice('Pausada');controls()}
 function resume(){if(recorder?.state!=='paused')return;runStart=Date.now();blockStart=Date.now();recorder.resume();session.status='recording';save();blockTimer=setInterval(()=>{if(recorder?.state==='recording'&&Date.now()-blockStart>=session.segmentMinutes*60000){rotating=true;clearInterval(blockTimer);recorder.stop()}},1000);notice('Grabando');controls()}
@@ -92,7 +223,10 @@ async function render(){
  $('segments').replaceChildren();
  let lastPrepare=null;
 
- // [PARCHE 1] Bloque de render por segmento: validación de audio, indicador visual, botones robustos
+ // [MODO SECUENCIAL] Conjunto de bloques ya marcados como enviados
+ const shared = new Set(session?.sharedSegments||[]);
+
+ // [PARCHE 1] Render por segmento con validación de audio
  for(let a of aud){
   let row=document.createElement('div');
   row.className='row';
@@ -103,7 +237,8 @@ async function render(){
   const wavState = hasAudio
     ? (ready() ? mb(preparedWav.blob.size)+' preparado' : '≈'+mb(wavEstimate(a)))
     : '⚠️ sin audio guardado';
-  label.textContent = `Bloque ${a.index} · ${fmt(a.startMs)}–${fmt(a.endMs)} · original ${mb(audioBytes(a))} · WAV ${wavState}`;
+  const sentMark = shared.has(a.id) ? ' · ✅ enviado' : '';
+  label.textContent = `Bloque ${a.index} · ${fmt(a.startMs)}–${fmt(a.endMs)} · original ${mb(audioBytes(a))} · WAV ${wavState}${sentMark}`;
 
   let play=document.createElement('button');
   play.textContent='Escuchar';
@@ -182,7 +317,7 @@ async function render(){
   lastPrepare=prepare;
  }
 
- // [PARCHE 2] Botones globales: seleccionar último bloque con audio válido
+ // [PARCHE 2] Botones globales: último bloque con audio válido
  const lastValidBlock = [...aud].reverse().find(x => x.blob && x.blob.size>0);
  $('prepareLatest').disabled = !lastValidBlock;
  $('prepareLatest').onclick = () => {
@@ -199,6 +334,22 @@ async function render(){
  };
  $('shareLatest').disabled = !(preparedWav?.sessionId===session?.id);
  $('shareLatest').onclick = shareWav;
+
+ // [MODO SECUENCIAL] Estado de los botones y hooks
+ const validBlocks = aud.filter(x=>x.blob&&x.blob.size>0);
+ $('sendSeq').disabled = !session || !validBlocks.length || active();
+ $('sendSeq').onclick = seqStart;
+ $('resetSeq').disabled = !session || !(session.sharedSegments?.length);
+ $('resetSeq').onclick = seqReset;
+ if(seqActive){
+  $('sendSeq').textContent='⏹ Detener envío';
+  $('sendSeq').classList.add('danger');
+  $('sendSeq').classList.remove('secondary');
+ }else{
+  $('sendSeq').textContent='📤 Enviar todos por WhatsApp';
+  $('sendSeq').classList.add('secondary');
+  $('sendSeq').classList.remove('danger');
+ }
 
  $('wavHelp').textContent = !session
   ? 'Abre una entrevista guardada abajo para ver sus bloques de audio.'
