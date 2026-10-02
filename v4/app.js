@@ -3,12 +3,26 @@ const $=id=>document.getElementById(id), DB='tesina_interviews_db', S='sessions'
 let db,session=null,recorder=null,stream=null,ctx=null,analyser=null,meterFrame=0,wake=null,blockStart=0,blockTimer=0,ticker=0,checkpoint=0,runStart=0,baseMs=0,stopping=false,rotating=false,writeChain=Promise.resolve(),testURL=null,preparedWav=null;
 let seqActive=false, seqAbort=false, seqWaiting=false;
 let playbackSource=null, playbackCtx=null;
+
 const fmt=ms=>{let s=Math.floor(Math.max(0,ms)/1000);return [Math.floor(s/3600),Math.floor(s/60)%60,s%60].map(n=>String(n).padStart(2,'0')).join(':')};
 const clean=s=>String(s||'sin_codigo').replace(/[^\p{L}\p{N}_-]+/gu,'_').slice(0,48);
 const date=t=>new Date(t).toLocaleString('es-MX');
 const active=()=>!!recorder && recorder.state!=='inactive';
 const duration=()=>baseMs+(session?.status==='recording'&&runStart?Date.now()-runStart:0);
-function notice(s,type=''){ $('status').textContent=s;$('status').className='status '+type }
+
+// [TOAST] Aviso flotante + barra de estado clásica
+function notice(s,type=''){
+ $('status').textContent=s;
+ $('status').className='status '+type;
+ const t=$('toast');
+ if(t){
+  t.textContent=s;
+  t.style.background = type==='error'?'#a53731':type==='warn'?'#a5731a':'#12334a';
+  t.style.transform='translateX(-50%) translateY(0)';
+  clearTimeout(notice._timer);
+  notice._timer=setTimeout(()=>{ t.style.transform='translateX(-50%) translateY(120%)'; }, type==='error'?6000:3500);
+ }
+}
 function mime(){return ['audio/mp4','audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus'].find(t=>MediaRecorder.isTypeSupported(t))||''}
 function ext(m){return m.includes('mp4')?'m4a':m.includes('ogg')?'ogg':'webm'}
 function open(){return new Promise((ok,no)=>{let r=indexedDB.open(DB,2);r.onupgradeneeded=()=>{let d=r.result;if(!d.objectStoreNames.contains(S))d.createObjectStore(S,{keyPath:'id'});if(!d.objectStoreNames.contains(A)){let st=d.createObjectStore(A,{keyPath:'id'});st.createIndex('sessionId','sessionId')}};r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)})}
@@ -308,15 +322,12 @@ async function render(){
   const sentMark = shared.has(a.id) ? ' · ✅ enviado' : '';
   label.textContent = `Bloque ${a.index} · ${fmt(a.startMs)}–${fmt(a.endMs)} · original ${mb(audioBytes(a))} · WAV ${wavState}${sentMark}`;
 
-  // [FIX REPRODUCCIÓN v2] Usar AudioContext (decodeAudioData) en lugar de <audio>
   let play=document.createElement('button');
   play.textContent='Escuchar';
   play.className='secondary';
   play.disabled=!hasAudio;
   play.onclick=async()=>{
    if(!hasAudio)return notice('Este bloque no tiene audio guardado.','error');
-
-   // Si ya está sonando este bloque, detener
    if(playbackSource){
     try{playbackSource.stop()}catch{}
     try{playbackCtx?.close()}catch{}
@@ -324,11 +335,9 @@ async function render(){
     notice('Reproducción detenida.','');
     return;
    }
-
    const declaredMime = a.mimeType||a.blobType||a.blob.type||'';
    const mimeType = safeAudioMime(declaredMime);
    notice(`Decodificando bloque ${a.index} (${mb(a.blob.size)}, ${mimeType})…`);
-
    try{
     const buf = await a.blob.arrayBuffer();
     const AudioClass = window.AudioContext || window.webkitAudioContext;
@@ -366,6 +375,28 @@ async function render(){
    download(new Blob([a.blob],{type:mimeType}),filename(a));
   };
 
+  // [DIAGNÓSTICO] Botón Info por bloque
+  let info=document.createElement('button');
+  info.textContent='🔍 Info';
+  info.className='secondary';
+  info.onclick=()=>{
+   const declaredMime = a.mimeType||a.blobType||a.blob.type||'(vacío)';
+   const size = a.blob?.size || a.size || 0;
+   const mimeOk = safeAudioMime(declaredMime);
+   const msg = [
+    `Bloque ${a.index}`,
+    `ID: ${a.id}`,
+    `Tamaño: ${mb(size)}`,
+    `MIME declarado: ${declaredMime}`,
+    `MIME seguro: ${mimeOk}`,
+    `Tiene blob: ${a.blob ? 'Sí' : 'No'}`,
+    `Inicio: ${fmt(a.startMs)}`,
+    `Fin: ${fmt(a.endMs)}`,
+    `Recibido: ${a.createdAt ? new Date(a.createdAt).toLocaleString('es-MX') : '(sin fecha)'}`
+   ].join('\n');
+   alert(msg);
+  };
+
   let tr=document.createElement('button');tr.textContent=a.transcript?'Retranscribir en línea':'Transcribir en línea';tr.className='secondary';tr.disabled=!hasAudio;tr.onclick=()=>transcribe(a);
   let imp=document.createElement('button');imp.textContent='Importar JSON offline';imp.className='secondary';let pick=document.createElement('input');pick.type='file';pick.accept='.json,application/json';pick.className='hidden';pick.onchange=async()=>{if(pick.files?.[0])await importOffline(a,pick.files[0]);pick.value=''};imp.onclick=()=>pick.click();
   let prepare=document.createElement('button');prepare.className='secondary';prepare.textContent='Preparar WAV';prepare.disabled=!hasAudio;
@@ -392,7 +423,7 @@ async function render(){
   wavDownload.onclick=()=>{if(ready())download(preparedWav.blob,preparedWav.name);else notice('Prepara de nuevo el WAV de este bloque.','warn')};
   wavShare.onclick=()=>{if(ready())shareWav();else notice('Prepara de nuevo el WAV de este bloque.','warn')};
 
-  row.append(label,play,dl,prepare,wavDownload,wavShare,tr,imp,pick);
+  row.append(label,play,dl,info,prepare,wavDownload,wavShare,tr,imp,pick);
   $('segments').append(row);
   lastPrepare=prepare;
  }
@@ -500,7 +531,7 @@ $('mark').onclick=()=>{let note=prompt('Descripción del momento importante:');i
 $('downloadAll').onclick=async()=>{let aud=(await segments()).filter(x=>x.blob&&x.blob.size>0);if(!aud.length)return notice('No hay bloques con audio válido para descargar.','warn');if(aud.length>5&&!confirm(`El navegador puede bloquear ${aud.length} descargas. ¿Continuar?`))return;for(let a of aud){const mimeType=safeAudioMime(a.mimeType||a.blobType||a.blob.type);download(new Blob([a.blob],{type:mimeType}),filename(a));await new Promise(ok=>setTimeout(ok,500))}};
 $('exportJson').onclick=async()=>{let aud=await segments();download(new Blob([JSON.stringify({...session,segments:aud.map(({blob,transcript,...rest})=>({...rest,transcript,fileName:filename(rest)}))},null,2)],{type:'application/json'}),clean(session.intervieweeCode)+'_ficha.json')};
 $('saveServer').onclick=()=>{let v=$('server').value.trim().replace(/\/$/,'');if(v&&(!/^https:\/\//i.test(v)||!v.endsWith('.php')))return alert('Escribe la URL HTTPS completa de transcribe.php.');localStorage.setItem('tesina_transcription_url',v);notice('URL guardada en este dispositivo.')};
-$('exportTxt').onclick=async()=>{if(session)download(new Blob([await textTranscript()],{type:'text/plain;charset=utf-8'}),clean(session.intervieweCode)+'_transcripcion.txt')};
+$('exportTxt').onclick=async()=>{if(session)download(new Blob([await textTranscript()],{type:'text/plain;charset=utf-8'}),clean(session.intervieweeCode)+'_transcripcion.txt')};
 $('exportDoc').onclick=exportDoc;
 $('addCode').onclick=()=>{if(!session)return alert('Abre una entrevista.');let quote=$('quote').value.trim();if(!quote)return alert('Selecciona un fragmento literal.');session.codes.push({interviewee:session.intervieweeCode,question:$('questionCode').value.trim(),quote,code:$('codeName').value.trim(),category:$('category').value.trim(),memo:$('memo').value.trim()});save().then(render);$('quote').value=''};
 $('exportCsv').onclick=()=>{if(!session)return;let head=['Entrevistado','Pregunta','Fragmento','Código','Categoría','Nota'];let lines=[head,...session.codes.map(x=>[x.interviewee,x.question,x.quote,x.code,x.category,x.memo])].map(row=>row.map(csv).join(','));download(new Blob(['\ufeff',lines.join('\r\n')],{type:'text/csv;charset=utf-8'}),clean(session.intervieweeCode)+'_matriz.csv')};
