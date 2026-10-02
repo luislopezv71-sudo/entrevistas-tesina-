@@ -1,6 +1,8 @@
 (()=>{'use strict';
 const $=id=>document.getElementById(id), DB='tesina_interviews_db', S='sessions', A='segments';
 let db,session=null,recorder=null,stream=null,ctx=null,analyser=null,meterFrame=0,wake=null,blockStart=0,blockTimer=0,ticker=0,checkpoint=0,runStart=0,baseMs=0,stopping=false,rotating=false,writeChain=Promise.resolve(),testURL=null,preparedWav=null;
+// [MODO SECUENCIAL] Estado del envío automático por WhatsApp
+let seqActive=false, seqAbort=false, seqWaiting=false;
 const fmt=ms=>{let s=Math.floor(Math.max(0,ms)/1000);return [Math.floor(s/3600),Math.floor(s/60)%60,s%60].map(n=>String(n).padStart(2,'0')).join(':')};
 const clean=s=>String(s||'sin_codigo').replace(/[^\p{L}\p{N}_-]+/gu,'_').slice(0,48);
 const date=t=>new Date(t).toLocaleString('es-MX');
