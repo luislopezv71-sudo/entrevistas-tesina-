@@ -2,6 +2,7 @@
 const $=id=>document.getElementById(id), DB='tesina_interviews_db', S='sessions', A='segments';
 let db,session=null,recorder=null,stream=null,ctx=null,analyser=null,meterFrame=0,wake=null,blockStart=0,blockTimer=0,ticker=0,checkpoint=0,runStart=0,baseMs=0,stopping=false,rotating=false,writeChain=Promise.resolve(),testURL=null,preparedWav=null;
 let seqActive=false, seqAbort=false, seqWaiting=false;
+let playbackSource=null, playbackCtx=null;
 const fmt=ms=>{let s=Math.floor(Math.max(0,ms)/1000);return [Math.floor(s/3600),Math.floor(s/60)%60,s%60].map(n=>String(n).padStart(2,'0')).join(':')};
 const clean=s=>String(s||'sin_codigo').replace(/[^\p{L}\p{N}_-]+/gu,'_').slice(0,48);
 const date=t=>new Date(t).toLocaleString('es-MX');
@@ -24,8 +25,6 @@ const audioBytes=a=>a.blob?.size??a.size??0;
 const mb=n=>(Math.max(0,n)/1048576).toFixed(2)+' MB';
 const sizeText=n=>n>=1073741824?(n/1073741824).toFixed(2)+' GB':mb(n);
 const wavEstimate=a=>44+Math.ceil(Math.max(0,(Number(a.endMs)||0)-(Number(a.startMs)||0))/1000*16000)*2;
-
-// [FIX REPRODUCCIÓN] Normalizador de MIME type válido
 function safeAudioMime(m){
  const fallback='audio/webm';
  if(!m||typeof m!=='string')return fallback;
@@ -39,7 +38,6 @@ function safeAudioMime(m){
  }
  return m;
 }
-
 async function convertToWav(blob){
  if(!blob || !(blob instanceof Blob) || blob.size===0)throw Error('El bloque no tiene audio válido. No se puede preparar WAV.');
  const AudioClass=window.AudioContext||window.webkitAudioContext;
@@ -76,10 +74,6 @@ function shareWav(){
   navigator.share({files:[file]}).catch(e=>{if(e.name!=='AbortError')notice('No se pudo compartir el WAV: '+e.message,'error')});
  }catch(e){notice('No se pudo compartir el WAV: '+e.message,'error')}
 }
-
-/* =========================================================
-   [MODO SECUENCIAL] Con confirmación manual
-   ========================================================= */
 async function seqPendingBlocks(){
  if(!session)return [];
  const shared=new Set(session.sharedSegments||[]);
@@ -177,63 +171,42 @@ async function seqLoop(){
   const done=total-pending.length+1;
   const a=pending[0];
   notice(`📤 Preparando bloque ${a.index} (${done} de ${total})…`,'warn');
-
   let blob;
   try{
-   blob=await convertToWav(a.blob);
+   const mimeType=safeAudioMime(a.mimeType||a.blobType||a.blob.type);
+   const cleanBlob=new Blob([a.blob],{type:mimeType});
+   blob=await convertToWav(cleanBlob);
   }catch(e){
    notice(`No se pudo preparar el WAV del bloque ${a.index}: ${e.message}`,'error');
    await seqMarkShared(a.id);
    continue;
   }
   preparedWav={sessionId:session.id,segmentId:a.id,blob,name:wavName(a)};
-
   const file=new File([blob],preparedWav.name,{type:'audio/wav'});
   const shareSupported = !!(navigator.share && navigator.canShare);
   const fileSupported = shareSupported && navigator.canShare({files:[file]});
-  console.log('[SEQ] Bloque',a.index,'· WAV',blob.size,'bytes · share',shareSupported,'· files',fileSupported);
-
   if(!shareSupported){
    notice(`Bloque ${a.index}: este navegador no permite compartir archivos. Descárgalo manualmente.`,'error');
-   await seqMarkShared(a.id);
-   continue;
+   await seqMarkShared(a.id);continue;
   }
   if(!fileSupported){
    notice(`Bloque ${a.index}: el teléfono no admite compartir WAV (${mb(blob.size)}). Descárgalo manualmente.`,'error');
-   await seqMarkShared(a.id);
-   continue;
+   await seqMarkShared(a.id);continue;
   }
-
-  let shareResult='unknown';
-  try{
-   await navigator.share({files:[file]});
-   shareResult='resolved';
-  }catch(e){
-   if(e.name==='AbortError'){
-    shareResult='aborted';
-   }else{
-    shareResult='error:'+e.message;
+  try{await navigator.share({files:[file]});}
+  catch(e){
+   if(e.name==='AbortError'){}
+   else{
     notice(`No se pudo compartir el bloque ${a.index}: ${e.message}`,'error');
-    await seqMarkShared(a.id);
-    continue;
+    await seqMarkShared(a.id);continue;
    }
   }
-  console.log('[SEQ] Resultado del share:',shareResult);
-
   const confirmacion = await seqConfirm(a.index, total);
-  if(confirmacion === 'cancel'){
-   notice('Envío secuencial detenido por el usuario.','warn');
-   seqStop();
-   return;
-  }
-  if(confirmacion === 'retry'){
-   notice(`Reintentando bloque ${a.index}…`,'warn');
-   continue;
-  }
+  if(confirmacion === 'cancel'){notice('Envío secuencial detenido por el usuario.','warn');seqStop();return;}
+  if(confirmacion === 'retry'){notice(`Reintentando bloque ${a.index}…`,'warn');continue;}
   await seqMarkShared(a.id);
   notice(`✅ Bloque ${a.index} enviado. Preparando siguiente…`,'');
   await render();
-
   seqWaiting=true;
   await new Promise(res=>setTimeout(()=>{seqWaiting=false;res()},600));
  }
@@ -244,13 +217,10 @@ async function seqLoop(){
   $('sendSeq').classList.remove('danger');
  }
 }
-
 async function wakeOn(){try{if(document.visibilityState==='visible'&&navigator.wakeLock)wake=await navigator.wakeLock.request('screen')}catch{}}
 async function cleanup(){clearInterval(blockTimer);clearInterval(ticker);clearInterval(checkpoint);blockTimer=ticker=checkpoint=0;if(meterFrame)cancelAnimationFrame(meterFrame);$('meter').value=0;try{await ctx?.close()}catch{}ctx=null;analyser=null;try{await wake?.release()}catch{}wake=null;stream?.getTracks().forEach(t=>t.stop());stream=null}
 function meterStart(){try{ctx=new (window.AudioContext||window.webkitAudioContext)();analyser=ctx.createAnalyser();analyser.fftSize=256;ctx.createMediaStreamSource(stream).connect(analyser);let data=new Uint8Array(analyser.frequencyBinCount);let draw=()=>{if(!analyser)return;analyser.getByteFrequencyData(data);$('meter').value=Math.min(100,Math.round(data.reduce((a,b)=>a+b,0)/data.length*2));meterFrame=requestAnimationFrame(draw)};draw()}catch{}}
 function beginClock(){runStart=Date.now();clearInterval(ticker);ticker=setInterval(()=>{$('timer').textContent=fmt(duration())},250);clearInterval(checkpoint);checkpoint=setInterval(()=>{save();storage()},10000)}
-
-// [FIX REPRODUCCIÓN] startBlock: aislar parts[] y forzar MIME type válido
 function startBlock(){
  if(stopping||!stream?.active)return;
  let type=mime();
@@ -262,30 +232,16 @@ function startBlock(){
  r.onerror=()=>{notice('Error del grabador. Revisa los bloques ya guardados.','error');stopping=true};
  r.onstop=()=>{
   let end=duration();
-  // [FIX REPRODUCCIÓN] Copiar los parts y forzar un MIME válido
   const safeMime=safeAudioMime(r.mimeType||type);
   let blob=new Blob([...parts],{type:safeMime});
   owner.segmentCount=index;
   let task=queue(async()=>{
    if(blob.size){
-    let row={
-     id:`${owner.id}-SEG-${String(index).padStart(4,'0')}`,
-     sessionId:owner.id,
-     index,
-     startMs:start,
-     endMs:end,
-     createdAt:Date.now(),
-     size:blob.size,
-     mimeType:safeMime,
-     blobType:safeMime,
-     blob
-    };
+    let row={id:`${owner.id}-SEG-${String(index).padStart(4,'0')}`,sessionId:owner.id,index,startMs:start,endMs:end,createdAt:Date.now(),size:blob.size,mimeType:safeMime,blobType:safeMime,blob};
     await put(A,row);
     owner.bytes=(owner.bytes||0)+blob.size;
     await put(S,{...owner,notes:$('notes').value,questions:$('questions').value,durationMs:end,updatedAt:Date.now()});
-   }else{
-    notice('Un bloque quedó vacío. Comprueba el micrófono.','warn');
-   }
+   }else notice('Un bloque quedó vacío. Comprueba el micrófono.','warn');
   });
   if(rotating&&!stopping){rotating=false;startBlock();notice('Grabando · bloque '+(index+1))}
   else{
@@ -310,11 +266,7 @@ function startBlock(){
  r.start();
  blockStart=Date.now();
  clearInterval(blockTimer);
- blockTimer=setInterval(()=>{
-  if(r.state==='recording'&&Date.now()-blockStart>=owner.segmentMinutes*60000){
-   rotating=true;clearInterval(blockTimer);r.stop();
-  }
- },1000);
+ blockTimer=setInterval(()=>{if(r.state==='recording'&&Date.now()-blockStart>=owner.segmentMinutes*60000){rotating=true;clearInterval(blockTimer);r.stop();}},1000);
  controls();
 }
 async function start(){if(!db||stopping||active())return;if(session?.status==='interrupted')return continueInterrupted();if(!($('project').value.trim()&&$('interviewer').value.trim()&&$('code').value.trim()&&$('consent').checked)){alert('Completa la ficha y confirma la autorización para grabar.');return}if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder){alert('Necesitas HTTPS y un navegador compatible con MediaRecorder.');return}try{stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true}});let now=Date.now();preparedWav=null;session={id:`ENT-${now}-${Math.random().toString(36).slice(2,8)}`,projectName:$('project').value.trim(),interviewer:$('interviewer').value.trim(),intervieweeCode:$('code').value.trim(),consent:true,startedAt:now,status:'recording',segmentMinutes:Number($('minutes').value),segmentCount:0,bytes:0,durationMs:0,markers:[],codes:[],sharedSegments:[],notes:$('notes').value,questions:$('questions').value};baseMs=0;await put(S,{...session});beginClock();startBlock();meterStart();wakeOn();notice('Grabando · primer bloque');render()}catch(e){await cleanup();notice('No se inició la grabación: '+e.message,'error')}}
@@ -340,6 +292,10 @@ async function render(){
  let lastPrepare=null;
  const shared = new Set(session?.sharedSegments||[]);
 
+ // Detener cualquier reproducción previa al re-renderizar
+ if(playbackSource){try{playbackSource.stop()}catch{}playbackSource=null}
+ if(playbackCtx){try{playbackCtx.close()}catch{}playbackCtx=null}
+
  for(let a of aud){
   let row=document.createElement('div');
   row.className='row';
@@ -352,37 +308,51 @@ async function render(){
   const sentMark = shared.has(a.id) ? ' · ✅ enviado' : '';
   label.textContent = `Bloque ${a.index} · ${fmt(a.startMs)}–${fmt(a.endMs)} · original ${mb(audioBytes(a))} · WAV ${wavState}${sentMark}`;
 
-  // [FIX REPRODUCCIÓN] play.onclick reconstruye el blob con MIME correcto
+  // [FIX REPRODUCCIÓN v2] Usar AudioContext (decodeAudioData) en lugar de <audio>
   let play=document.createElement('button');
   play.textContent='Escuchar';
   play.className='secondary';
   play.disabled=!hasAudio;
   play.onclick=async()=>{
-   let old=row.querySelector('audio');
-   if(old){URL.revokeObjectURL(old.src);old.remove();return}
    if(!hasAudio)return notice('Este bloque no tiene audio guardado.','error');
+
+   // Si ya está sonando este bloque, detener
+   if(playbackSource){
+    try{playbackSource.stop()}catch{}
+    try{playbackCtx?.close()}catch{}
+    playbackSource=null;playbackCtx=null;
+    notice('Reproducción detenida.','');
+    return;
+   }
+
+   const declaredMime = a.mimeType||a.blobType||a.blob.type||'';
+   const mimeType = safeAudioMime(declaredMime);
+   notice(`Decodificando bloque ${a.index} (${mb(a.blob.size)}, ${mimeType})…`);
+
    try{
-    const buf=await a.blob.arrayBuffer();
-    const declaredMime=a.mimeType||a.blobType||a.blob.type||'';
-    const mimeType=safeAudioMime(declaredMime);
-    const cleanBlob=new Blob([buf],{type:mimeType});
-    const p=document.createElement('audio');
-    p.controls=true;
-    p.preload='metadata';
-    p.src=URL.createObjectURL(cleanBlob);
-    p.onerror=()=>{
-     const err=p.error;
-     notice(`No se puede reproducir el bloque ${a.index} (${mimeType}, ${mb(buf.byteLength)}).${err?' Código '+err.code:''}`,'error');
+    const buf = await a.blob.arrayBuffer();
+    const AudioClass = window.AudioContext || window.webkitAudioContext;
+    const ac = new AudioClass();
+    let audioBuf;
+    try{
+     audioBuf = await ac.decodeAudioData(buf.slice(0));
+    }catch(e1){
+     const cleanBlob = new Blob([buf], {type:mimeType});
+     audioBuf = await ac.decodeAudioData(await cleanBlob.arrayBuffer());
+    }
+    const src = ac.createBufferSource();
+    src.buffer = audioBuf;
+    src.connect(ac.destination);
+    src.onended = () => {
+     if(playbackSource===src){playbackSource=null;try{ac.close()}catch{}playbackCtx=null;notice('Reproducción terminada.','')}
     };
-    p.onloadedmetadata=()=>{
-     if(!isFinite(p.duration)||p.duration===0){
-      notice(`El bloque ${a.index} tiene duración 0. Puede estar vacío o corrupto.`,'warn');
-     }
-    };
-    row.append(p);
-    try{await p.play()}catch{}
+    src.start();
+    playbackSource = src;
+    playbackCtx = ac;
+    notice(`▶️ Reproduciendo bloque ${a.index} · ${audioBuf.duration.toFixed(1)} s · ${mimeType}. Pulsa "Escuchar" de nuevo para detener.`, '');
    }catch(e){
-    notice(`No se pudo cargar el bloque ${a.index}: ${e.message}`,'error');
+    console.error('[PLAY]',e);
+    notice(`No se pudo reproducir el bloque ${a.index}: ${e.message}`, 'error');
    }
   };
 
@@ -530,7 +500,7 @@ $('mark').onclick=()=>{let note=prompt('Descripción del momento importante:');i
 $('downloadAll').onclick=async()=>{let aud=(await segments()).filter(x=>x.blob&&x.blob.size>0);if(!aud.length)return notice('No hay bloques con audio válido para descargar.','warn');if(aud.length>5&&!confirm(`El navegador puede bloquear ${aud.length} descargas. ¿Continuar?`))return;for(let a of aud){const mimeType=safeAudioMime(a.mimeType||a.blobType||a.blob.type);download(new Blob([a.blob],{type:mimeType}),filename(a));await new Promise(ok=>setTimeout(ok,500))}};
 $('exportJson').onclick=async()=>{let aud=await segments();download(new Blob([JSON.stringify({...session,segments:aud.map(({blob,transcript,...rest})=>({...rest,transcript,fileName:filename(rest)}))},null,2)],{type:'application/json'}),clean(session.intervieweeCode)+'_ficha.json')};
 $('saveServer').onclick=()=>{let v=$('server').value.trim().replace(/\/$/,'');if(v&&(!/^https:\/\//i.test(v)||!v.endsWith('.php')))return alert('Escribe la URL HTTPS completa de transcribe.php.');localStorage.setItem('tesina_transcription_url',v);notice('URL guardada en este dispositivo.')};
-$('exportTxt').onclick=async()=>{if(session)download(new Blob([await textTranscript()],{type:'text/plain;charset=utf-8'}),clean(session.intervieweeCode)+'_transcripcion.txt')};
+$('exportTxt').onclick=async()=>{if(session)download(new Blob([await textTranscript()],{type:'text/plain;charset=utf-8'}),clean(session.intervieweCode)+'_transcripcion.txt')};
 $('exportDoc').onclick=exportDoc;
 $('addCode').onclick=()=>{if(!session)return alert('Abre una entrevista.');let quote=$('quote').value.trim();if(!quote)return alert('Selecciona un fragmento literal.');session.codes.push({interviewee:session.intervieweeCode,question:$('questionCode').value.trim(),quote,code:$('codeName').value.trim(),category:$('category').value.trim(),memo:$('memo').value.trim()});save().then(render);$('quote').value=''};
 $('exportCsv').onclick=()=>{if(!session)return;let head=['Entrevistado','Pregunta','Fragmento','Código','Categoría','Nota'];let lines=[head,...session.codes.map(x=>[x.interviewee,x.question,x.quote,x.code,x.category,x.memo])].map(row=>row.map(csv).join(','));download(new Blob(['\ufeff',lines.join('\r\n')],{type:'text/csv;charset=utf-8'}),clean(session.intervieweeCode)+'_matriz.csv')};
