@@ -1,24 +1,24 @@
-# Entrevistas de investigación 4.5
+# Entrevistas de investigación 4.6
 
-Actualización sobre los cuatro archivos suministrados de la versión 4.4.
+Actualización de 4.5 para retomar las partes al regresar de WhatsApp.
 
-## Instalar en el sitio existente
+## Instalar
 
-Reemplaza en la misma carpeta de GitHub Pages `index.html`, `app.js`, `sw.js` y `manifest.webmanifest` con los incluidos. Conserva tu carpeta `icons/` y los demás archivos del sitio. Usa la misma dirección y el mismo navegador para seguir accediendo a las entrevistas guardadas. No borres los datos del sitio. Después de publicar, cierra y vuelve a abrir la aplicación y comprueba que el encabezado muestre 4.5.
+Reemplaza `index.html`, `app.js`, `sw.js` y `manifest.webmanifest` en la misma carpeta publicada. Conserva `icons/` y todos los demás archivos. No borres datos del sitio ni cambies de dirección o navegador para acceder a las entrevistas existentes. Cierra y vuelve a abrir la página después de publicar y comprueba el encabezado 4.6.
 
-## Compartir audios grandes
+## Retomar la parte 2 que falta
 
-1. Abre la entrevista y pulsa **Preparar WAV**.
-2. Pulsa **Compartir WAV**. Si supera 15 millones de bytes, se preparan partes WAV independientes, cada una con su propia cabecera y de hasta 15 MB decimales.
-3. En cada parte, pulsa **Compartir esta parte**, selecciona WhatsApp y envía el archivo.
-4. Al regresar, confirma **Sí, llegó al chat** solo cuando compruebes la entrega. El programa continúa con la siguiente parte.
+1. Abre la entrevista y pulsa Preparar WAV en el bloque 1.
+2. Debajo del bloque aparecerán todas sus partes, cada una con Compartir, Descargar y Confirmar enviada.
+3. Si la parte 1 ya llegó al chat, pulsa Confirmar enviada en esa parte. No necesitas compartirla otra vez.
+4. Pulsa Compartir parte 2. Regresa a la página tras enviarla y confirma su entrega.
 
-**Enviar todos por WhatsApp** sigue el mismo flujo para los bloques pendientes. No marca un bloque como enviado si falla la preparación, falla el compartir o cancelas una parte. Si cancelas después de enviar algunas partes de un bloque, el bloque sigue pendiente: el reintento comienza desde su primera parte y puede duplicar las ya enviadas. Las marcas antiguas de la versión 4.4 se conservan; usa Reiniciar marcas de envío si esa versión marcó como enviado un bloque que falló.
+Las confirmaciones se guardan en IndexedDB. Si el teléfono recarga la página, abre la entrevista y vuelve a preparar el WAV: las partes confirmadas se reconocen y las demás siguen pendientes. Los WAV preparados se regeneran en memoria; no se guardan copias adicionales en la base de entrevistas.
 
-**Descargar WAV** conserva el archivo completo, incluso si supera 15 MB. En el diálogo puedes descargar una parte y adjuntarla como documento si el dispositivo no permite compartir desde el navegador.
+Enviar todos prepara el primer bloque pendiente y muestra sus partes. Al confirmar todas sus partes, prepara el bloque siguiente. No se abren menús de compartir automáticamente; cada archivo se comparte con un toque del usuario.
 
-Los nombres `_parte_01_de_02.wav` indican el orden dentro del bloque; conserva todas las partes y sus nombres. La división no corta ni descarta muestras de audio. El umbral de 15 MB es una medida para evitar el problema observado en ese teléfono, no una garantía sobre todas las versiones de WhatsApp.
+Cada parte permanece debajo de su bloque; el diálogo temporal de 4.5 se eliminó. El límite sigue siendo 15 MB decimales por parte. Descargar WAV guarda el bloque completo. Reiniciar marcas de envío borra también las confirmaciones por parte.
 
-## Comprobaciones
+## Verificación
 
-Se verificó la sintaxis de JavaScript, las cabeceras WAV y el tamaño de las partes para audios sintéticos de hasta 32 MB. La suma de los datos PCM de las partes coincide exactamente con el original. Falta comprobar el envío real desde el teléfono y WhatsApp. El WAV local continúa siendo mono de 16 kHz y 16 bits, y la conversión mantiene el límite previo de bloques de hasta unos diez minutos.
+Se comprobó la sintaxis y la conservación del avance después de serializar y recuperar el estado: confirmar la primera parte no marca todo el bloque; preparar de nuevo conserva esa confirmación; la segunda continúa pendiente; el bloque se marca solo al confirmar ambas. La división WAV conserva la lógica validada de 4.5. Falta comprobar el comportamiento real en el teléfono con WhatsApp.

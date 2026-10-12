@@ -98,38 +98,61 @@ async function splitWav(blob,name){
  return parts;
 }
 async function wavPackage(owner,a,blob){const name=wavName(a);return {sessionId:owner,segmentId:a.id,blob,name,parts:await splitWav(blob,name)}}
-function sharePart(part,label){
- return new Promise(resolve=>{
-  const overlay=document.createElement('div');overlay.style.cssText='position:fixed;inset:0;background:#0009;z-index:9999;display:grid;place-items:center;padding:16px';
-  const box=document.createElement('div');box.style.cssText='background:white;border-radius:14px;padding:20px;max-width:440px;width:100%';
-  const title=document.createElement('h3');title.textContent=label;
-  const text=document.createElement('p');text.textContent=part.name+' · '+(part.blob.size/1000000).toFixed(2)+' MB. Pulsa Compartir, elige WhatsApp y después confirma que llegó al chat.';
-  const send=document.createElement('button');send.textContent='Compartir esta parte';
-  const yes=document.createElement('button');yes.textContent='Sí, llegó al chat';yes.disabled=true;
-  const dl=document.createElement('button');dl.textContent='Descargar parte';dl.className='secondary';dl.onclick=()=>download(part.blob,part.name);
-  const cancel=document.createElement('button');cancel.textContent='Cancelar';cancel.className='danger';
-  let closed=false;const close=result=>{if(closed)return;closed=true;overlay.remove();shareDialogClose=null;resolve(result)};shareDialogClose=()=>close(false);cancel.onclick=()=>close(false);yes.onclick=()=>close(true);
-  send.onclick=()=>{
-   yes.disabled=true;
-   try{const file=new File([part.blob],part.name,{type:'audio/wav'});
-    if(!navigator.share||!navigator.canShare?.({files:[file]})){text.textContent='Este teléfono no admite compartir este archivo. Descarga la parte y adjúntala como documento en WhatsApp; confirma solo cuando llegue.';yes.disabled=false;return}
-    send.disabled=true;
-    navigator.share({files:[file]}).then(()=>{if(!closed)yes.disabled=false}).catch(e=>{if(!closed)text.textContent=e.name==='AbortError'?'Envío cancelado. Puedes volver a intentarlo.':'No se pudo compartir: '+e.message}).finally(()=>{send.disabled=false});
-   }catch(e){text.textContent='No se pudo compartir: '+e.message}
-  };
-  box.append(title,text,send,dl,yes,cancel);overlay.append(box);document.body.append(overlay);
- });
+function partKey(part){return part.name+'|'+part.blob.size}
+async function savePartPlan(pkg){
+ if(session?.id!==pkg.sessionId)throw Error('La entrevista cambió durante la preparación');
+ session.wavPartProgress=session.wavPartProgress||{};
+ const previous=session.wavPartProgress[pkg.segmentId]?.parts||[];
+ const confirmed=new Set(previous.filter(p=>p.sent).map(p=>p.key));
+ session.wavPartProgress[pkg.segmentId]={parts:pkg.parts.map(p=>({key:partKey(p),name:p.name,bytes:p.blob.size,sent:confirmed.has(partKey(p))}))};
+ await put(S,{...session});
 }
-async function sharePackage(pkg,label){
- if(sharingParts)return false;
- sharingParts=true;
- try{for(let i=0;i<pkg.parts.length;i++){if(session?.id!==pkg.sessionId)return false;if(!await sharePart(pkg.parts[i],`${label} · parte ${i+1} de ${pkg.parts.length}`))return false}return true}finally{sharingParts=false}
+async function confirmWavPart(pkg,part){
+ if(session?.id!==pkg.sessionId)throw Error('Abre de nuevo esta entrevista');
+ const plan=session.wavPartProgress?.[pkg.segmentId];
+ if(!plan)throw Error('Prepara de nuevo las partes');
+ const entry=plan.parts.find(p=>p.key===partKey(part));
+ if(!entry)throw Error('La parte preparada no coincide con el registro');
+ const old=entry.sent;entry.sent=true;
+ try{await put(S,{...session})}catch(e){entry.sent=old;throw e}
+ if(plan.parts.every(p=>p.sent))await seqMarkShared(pkg.segmentId);
+ return plan.parts.every(p=>p.sent);
+}
+function renderPartControls(pkg){
+ const box=document.createElement('div');box.id='prepared-wav-parts';box.style.cssText='width:100%;min-width:0;padding:12px;background:#eff5f7;border-radius:10px';
+ const h=document.createElement('h3');h.textContent='Partes listas para enviar';box.append(h);
+ const help=document.createElement('p');help.textContent='Al regresar de WhatsApp, vuelve a este bloque y confirma la parte enviada. Después pulsa Compartir en la siguiente parte. El avance queda guardado.';box.append(help);
+ const plan=session.wavPartProgress?.[pkg.segmentId]?.parts||[];
+ pkg.parts.forEach((part,i)=>{
+  const entry=plan.find(p=>p.key===partKey(part)),sent=!!entry?.sent;
+  const row=document.createElement('div');row.className='row';row.style.minWidth='0';
+  const label=document.createElement('div');label.style.cssText='width:100%;overflow-wrap:anywhere';label.textContent=`Parte ${i+1} de ${pkg.parts.length} · ${(part.blob.size/1000000).toFixed(2)} MB · ${sent?'Envío confirmado':'Pendiente'} · ${part.name}`;
+  const share=document.createElement('button');share.textContent=sent?'Volver a compartir':'Compartir parte '+(i+1);
+  share.onclick=()=>{
+   try{const file=new File([part.blob],part.name,{type:'audio/wav'});
+    if(!navigator.share||!navigator.canShare?.({files:[file]}))return notice('Descarga esta parte y adjúntala como documento desde WhatsApp.','warn');
+    share.disabled=true;
+    navigator.share({files:[file]}).then(()=>notice('Al regresar, confirma la parte '+(i+1)+' solo si llegó al chat.')).catch(e=>notice(e.name==='AbortError'?'Envío cancelado; la parte sigue pendiente.':'No se pudo compartir: '+e.message,'warn')).finally(()=>{share.disabled=false});
+   }catch(e){notice('No se pudo compartir: '+e.message,'error')}
+  };
+  const dl=document.createElement('button');dl.className='secondary';dl.textContent='Descargar parte '+(i+1);dl.onclick=()=>download(part.blob,part.name);
+  const done=document.createElement('button');done.className='secondary';done.textContent=sent?'Confirmada':'Confirmar enviada';done.disabled=sent;
+  done.onclick=async()=>{
+   if(!confirm('¿La parte '+(i+1)+' ya llegó al chat de WhatsApp?'))return;
+   done.disabled=true;
+   try{const complete=await confirmWavPart(pkg,part);await render();notice(complete?'Todas las partes de este bloque tienen envío confirmado.':'Parte confirmada. Continúa con la siguiente parte pendiente.');if(complete&&seqActive)await seqLoop()}catch(e){done.disabled=false;notice('No se pudo guardar la confirmación: '+e.message,'error')}
+  };
+  row.append(label,share,dl,done);box.append(row);
+ });
+ return box;
+}
+function showPreparedParts(){
+ const panel=document.getElementById('prepared-wav-parts');
+ if(panel)panel.scrollIntoView({behavior:'smooth',block:'center'});
 }
 async function shareWav(){
- if(seqActive||sharingParts)return notice('Termina o cancela el envío actual.','warn');
  if(!preparedWav||preparedWav.sessionId!==session?.id)return notice('Prepara el WAV de este bloque primero.','warn');
- const pkg=preparedWav;
- if(await sharePackage(pkg,'Enviar WAV')){await seqMarkShared(pkg.segmentId);notice('Envío confirmado por el usuario.');await render()}
+ await render();showPreparedParts();notice('Las partes están visibles debajo de su bloque. Comparte cada parte pendiente.');
 }
 async function seqPendingBlocks(){
  if(!session)return [];
@@ -149,6 +172,7 @@ async function seqReset(){
  if(!session)return;
  if(!confirm('¿Reiniciar las marcas de envío? Todos los bloques volverán a aparecer como pendientes.'))return;
  session.sharedSegments=[];
+ session.wavPartProgress={};
  session.updatedAt=Date.now();
  await put(S,{...session});
  notice('Marcas de envío reiniciadas.');
@@ -182,22 +206,20 @@ function seqStop(){
 }
 async function seqLoop(){
  try{
-  while(seqActive&&!seqAbort){
-   const pending=await seqPendingBlocks();
-   if(!pending.length){notice('Todos los bloques tienen envío confirmado por el usuario.');break}
-   const a=pending[0],owner=session.id;
-   notice(`Preparando bloque ${a.index}…`,'warn');
-   const cleanBlob=new Blob([a.blob],{type:safeAudioMime(a.mimeType||a.blobType||a.blob.type)});
-   const blob=await convertToWav(cleanBlob);
-   if(seqAbort||session?.id!==owner)break;
-   preparedWav=await wavPackage(owner,a,blob);
-   if(seqAbort)break;
-   if(!await sharePackage(preparedWav,`Bloque ${a.index}`))break;
-   if(seqAbort||session?.id!==owner)break;
-   await seqMarkShared(a.id);await render();
-  }
- }catch(e){notice('El bloque sigue pendiente. No se pudo completar el envío: '+e.message,'error')}
- finally{seqActive=false;seqAbort=false;seqWaiting=false;$('sendSeq').textContent='📤 Enviar todos por WhatsApp';$('sendSeq').classList.add('secondary');$('sendSeq').classList.remove('danger');render()}
+  if(!seqActive||seqAbort)return;
+  const pending=await seqPendingBlocks();
+  if(!pending.length){seqStop();notice('Todos los bloques tienen envío confirmado por el usuario.');await render();return}
+  const a=pending[0],owner=session.id;
+  const progress=session.wavPartProgress?.[a.id];
+  if(progress?.parts.length&&progress.parts.every(p=>p.sent)){await seqMarkShared(a.id);return seqLoop()}
+  notice(`Preparando partes del bloque ${a.index}…`,'warn');
+  const cleanBlob=new Blob([a.blob],{type:safeAudioMime(a.mimeType||a.blobType||a.blob.type)});
+  const blob=await convertToWav(cleanBlob);
+  if(seqAbort||session?.id!==owner)return;
+  preparedWav=await wavPackage(owner,a,blob);await savePartPlan(preparedWav);
+  if(seqAbort)return;
+  await render();showPreparedParts();notice('Comparte y confirma cada parte pendiente. Al completar el bloque se prepara el siguiente.');
+ }catch(e){seqStop();notice('El bloque sigue pendiente: '+e.message,'error')}
 }
 async function wakeOn(){try{if(document.visibilityState==='visible'&&navigator.wakeLock)wake=await navigator.wakeLock.request('screen')}catch{}}
 async function cleanup(){clearInterval(blockTimer);clearInterval(ticker);clearInterval(checkpoint);blockTimer=ticker=checkpoint=0;if(meterFrame)cancelAnimationFrame(meterFrame);$('meter').value=0;try{await ctx?.close()}catch{}ctx=null;analyser=null;try{await wake?.release()}catch{}wake=null;stream?.getTracks().forEach(t=>t.stop());stream=null}
@@ -381,6 +403,7 @@ async function render(){
     const blob=await convertToWav(cleanBlob);
     if(session?.id!==owner){notice('Cambiaste de sesión durante la conversión. Abre el bloque de nuevo.','warn');return}
     preparedWav=await wavPackage(owner,a,blob);
+    await savePartPlan(preparedWav);
     wavDownload.disabled=wavShare.disabled=false;
     await render();
     notice('WAV listo · '+(blob.size/1000000).toFixed(2)+' MB · '+preparedWav.parts.length+' parte(s) para compartir de hasta 15 MB. Descargar WAV conserva el bloque completo.');
@@ -392,7 +415,10 @@ async function render(){
   wavShare.onclick=()=>{if(ready())shareWav();else notice('Prepara de nuevo el WAV de este bloque.','warn')};
 
   row.append(label,play,dl,info,prepare,wavDownload,wavShare,tr,imp,pick);
+  if(ready())row.append(renderPartControls(preparedWav));
   $('segments').append(row);
+  const progress=session?.wavPartProgress?.[a.id];
+  if(progress&&!ready()){const hint=document.createElement('p');hint.style.cssText='width:100%;overflow-wrap:anywhere';hint.textContent='Partes con envío confirmado: '+progress.parts.filter(p=>p.sent).length+' de '+progress.parts.length+'. Pulsa Preparar WAV para retomar las pendientes.';row.append(hint)}
   lastPrepare=prepare;
  }
 
@@ -416,7 +442,7 @@ async function render(){
  const validBlocks = aud.filter(x=>x.blob&&x.blob.size>0);
  $('sendSeq').disabled = !session || !validBlocks.length || active();
  $('sendSeq').onclick = seqStart;
- $('resetSeq').disabled = !session || !(session.sharedSegments?.length);
+ $('resetSeq').disabled = !session || !(session.sharedSegments?.length||Object.keys(session.wavPartProgress||{}).length);
  $('resetSeq').onclick = seqReset;
  if(seqActive){
   $('sendSeq').textContent='⏹ Detener envío';
