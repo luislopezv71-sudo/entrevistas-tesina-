@@ -1,4 +1,4 @@
-<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Limpiador de entrevistas · v8.1</title><style>
+<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Limpiador de entrevistas · v8.2</title><style>
 :root{font-family:Arial,sans-serif;color:#173044;background:#eef3f5}*{box-sizing:border-box}body{margin:0}.wrap{max-width:990px;margin:auto;padding:20px}header{background:#12334a;color:white;border-radius:16px;padding:22px}h1{font-size:1.6rem;margin:0 0 8px}h2{font-size:1.15rem}.card{background:white;border-radius:15px;padding:18px;margin:16px 0;box-shadow:0 2px 10px #16324414}textarea,input,select{font:inherit;width:100%;padding:10px;border:1px solid #a8bac6;border-radius:8px}textarea{min-height:160px}button,.link{display:inline-block;background:#0d6583;color:white;border:0;border-radius:8px;padding:11px 15px;font:inherit;cursor:pointer;margin:5px 5px 5px 0;text-decoration:none}button.secondary,.link.secondary{background:#dbe8ee;color:#173044}.muted{color:#566876;font-size:.93rem}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.turn{border-top:1px solid #dce4e9;padding:12px 0}.turn label{display:block;font-weight:bold;margin-bottom:8px}.turn textarea{min-height:90px}.n{font-size:.83rem;color:#627784}#preview{font:12pt Arial,sans-serif;line-height:1.4;white-space:pre-wrap}#preview p{margin:0 0 12px}.warning{background:#fff2d6;padding:12px;border-radius:8px}@media(max-width:650px){.grid{grid-template-columns:1fr}}
 </style></head><body><main class="wrap"><header><h1>Limpiador académico de entrevistas</h1><div>Herramienta complementaria · Versión 8.1 · Exportación Word Arial 12</div></header>
 <section class="card"><a class="link secondary" href="./index.html">← Regresar a entrevistas</a><h2>1. Importar transcripción</h2><p class="muted">Importa un TXT con marcas de WhatsApp o pega el texto. Todo se procesa localmente en este navegador; no se envía a servidores.</p><input id="file" type="file" accept=".txt,text/plain"><p><textarea id="source" placeholder="Pega aquí la transcripción completa..."></textarea></p><button id="process">Limpiar y detectar preguntas</button><button id="clear" class="secondary">Vaciar</button></section>
@@ -19,44 +19,58 @@ function questionStart(s){
  const t=norm(s);return cues.some(c=>t.startsWith(norm(c)));
 }
 function segment(lines){
- const out=[];let current=null;
- function add(type,s){s=s.trim();if(!s)return;current={type,text:s};out.push(current)}
- function append(s){if(current?.type==='Pregunta' && (/^¿/.test(s) || (current.text.match(/¿/g)||[]).length>(current.text.match(/\?/g)||[]).length))current.text+=' '+s;else if(current?.type==='Pregunta' && current.text.includes('?'))add('Respuesta',s);else if(current)current.text+=' '+s;else add('Sin clasificar',s)}
- for(const raw of lines){
-   let s=raw.trim();if(!s)continue;
-   // Ubica únicamente comienzos de preguntas de la guía. Estas preguntas pueden
-   // aparecer después de una respuesta, dentro de una misma línea de transcripción.
-   const m=[];for(const cue of cues){
-     const tokens=cue.split(/\s+/).map(x=>x.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
-     const exp=new RegExp('(?:^|(?<=[.?!]\\s)|(?<=\\s))([¿]?'+tokens.join('\\s+')+')','giu');
-     for(const found of s.matchAll(exp)){let pos=found.index+found[0].indexOf(found[1]);
-       if(pos>0 && !/[.!?]\s*$/.test(s.slice(0,pos)) && !/^¿/.test(s.slice(pos)))continue;
-       if(!m.includes(pos))m.push(pos);
+ const out=[];
+ const normalizeSpaces=s=>s.replace(/\s+/g,' ').trim();
+ function push(type,text){text=normalizeSpaces(text);if(!text)return;const last=out[out.length-1];if(last&&last.type===type&&type==='Respuesta')last.text+=' '+text;else out.push({type,text})}
+ // Los cortes de la transcripción se conservan hasta reconstruir preguntas completas.
+ let buffer='';
+ for(const line of lines)buffer+=(buffer?' ':'')+line.trim();
+ // Las preguntas de guía se reconocen por un inicio conocido, incluso si la línea
+ // contiene también la respuesta. No se consideran preguntas retóricas arbitrarias.
+ const starts=[];
+ for(const cue of cues){
+   const words=cue.split(/\s+/).map(x=>x.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
+   const expression=new RegExp('(?:^|[.!?]\\s+|\\s+)(¿?'+words.join('\\s+')+')','giu');
+   for(const found of buffer.matchAll(expression)){
+     const idx=found.index+found[0].indexOf(found[1]);
+     if(!starts.includes(idx))starts.push(idx);
+   }
+ }
+ starts.sort((a,b)=>a-b);
+ function processQuestionAndAnswer(piece){
+   let text=piece.trim();if(!text)return;
+   // Dos interrogantes consecutivos en una misma pregunta de guía se mantienen juntos.
+   const match=[...text.matchAll(/\?/g)];
+   let stop=-1;
+   if(match.length){stop=match[0].index+1;
+     const rest=text.slice(stop).trim();
+     if(/^¿/.test(rest)){
+       const second=rest.indexOf('?');if(second>=0)stop+=text.slice(stop).indexOf('¿')+second+1;
      }
    }
-   m.sort((a,b)=>a-b);
-   if(!m.length){append(s);continue}
-   let cursor=0;
-   for(const pos of m){if(pos>cursor)append(s.slice(cursor,pos).trim());
-     const q=s.slice(pos); // determine where the interview question ends: first closing ? or end of line
-     const close=q.indexOf('?'); const len=close>=0?close+1:q.length;
-     add('Pregunta',q.slice(0,len));cursor=pos+len;
+   if(stop<0){push('Pregunta',text);return}
+   push('Pregunta',text.slice(0,stop));
+   const rest=text.slice(stop).trim();if(rest)push('Respuesta',rest);
+ }
+ if(!starts.length){push('Respuesta',buffer)}
+ else{
+   if(starts[0]>0)push('Sin clasificar',buffer.slice(0,starts[0]));
+   for(let i=0;i<starts.length;i++){
+     const segment=buffer.slice(starts[i],i+1<starts.length?starts[i+1]:undefined);
+     processQuestionAndAnswer(segment);
    }
-   if(cursor<s.length) append(s.slice(cursor).trim());
  }
- // A question often spans two or more timestamp lines. Merge until a terminal '?'.
- const fixed=[];
- for(const item of out){const last=fixed[fixed.length-1];
-   if(last?.type==='Pregunta' && !last.text.includes('?') && item.type!=='Pregunta')last.text+=' '+item.text;
-   else if(last?.type===item.type && item.type==='Respuesta')last.text+=' '+item.text;
-   else fixed.push({...item});
+ // Identificar el cierre por la frase de la entrevistadora, no por la última
+ // pregunta de la guía: así la última respuesta queda bajo RESPUESTA.
+ const fixed=[];let closing=false;
+ for(const item of out){
+   const marker=/muchas gracias por tu narrativa|de verdad te agradezco, ya termin[eé] de grabar/i.exec(item.text);
+   if(marker&&!closing){
+     if(marker.index>0)fixed.push({type:item.type==='Pregunta'?'Respuesta':item.type,text:item.text.slice(0,marker.index).trim()});
+     fixed.push({type:'Cierre',text:item.text.slice(marker.index).trim()});closing=true;
+   }else fixed.push({type:closing?'Cierre':item.type,text:item.text});
  }
- // Explicitly flag dialogue after recorded interview closing.
- let closing=false;for(const t of fixed){if(/muchas gracias por tu narrativa|ya termine de grabar/i.test(t.text))closing=true;if(closing)t.type='Cierre';}
- // Anything outside an identified question is not verifiably the interviewee;
- // user may relabel or review. Retain 'Respuesta' for conversational usability.
- for(const t of fixed){if(t.type==='Sin clasificar')t.type='Respuesta';}
- return fixed;
+ return fixed.filter(t=>t.text);
 }
 function getLines(){return turns.filter(t=>t.text.trim()).map(t=>({type:t.type,text:t.text.trim()}))}
 function format(t){return ($('#labels').checked?t.type.toUpperCase()+': ':'')+t.text}
